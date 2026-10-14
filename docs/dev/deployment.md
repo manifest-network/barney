@@ -79,14 +79,18 @@ Unset or empty, every provider registered on chain remains available. When it
 is set, Barney treats every other provider as nonexistent:
 
 - The SKU tiers, single and batch deploy planning, and `browse_catalog` offer
-  only listed providers and their SKUs.
+  only listed providers and their SKUs. A deploy also checks the URL the SDK
+  resolves from chain just before creating the lease, so a provider that
+  changed its `api_url` after planning is refused before any transaction.
 - Apps on other providers are hidden from the sidebar, every app tool
   (`list_apps`, `app_status`, logs, diagnostics, releases, restart, update,
   stop, custom domains) and background recovery. Barney sends them no Fred
   request, so it never guesses a protocol for them. An app whose provider has
   not been resolved yet stays hidden until discovery resolves it.
 - Hidden apps stay in browser storage. Correcting the setting restores their
-  local names and manifests.
+  local names and manifests. Their names stay reserved: a new deployment with
+  the same name gets a numeric suffix, so names stay unambiguous if the apps
+  reappear.
 
 Leases on other providers still bill. `lease_history` and the credit balance
 and burn rate are chain records and still include them. Barney cannot close

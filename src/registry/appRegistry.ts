@@ -375,8 +375,10 @@ export function validateAppName(
   if (!APP_NAME_REGEX.test(name)) {
     return 'App name must be lowercase alphanumeric with hyphens, and cannot start or end with a hyphen.';
   }
-  // Uniqueness check — only running/deploying apps block the name
-  const apps = visibleApps(loadApps(address));
+  // Uniqueness check — only running/deploying apps block the name. Hidden apps
+  // (PUBLIC_PROVIDER_ALLOWLIST) count too, so names stay unambiguous if they
+  // become visible again; deploys auto-suffix around them.
+  const apps = loadApps(address);
   const existing = apps.find(
     (a) =>
       a.name === name &&

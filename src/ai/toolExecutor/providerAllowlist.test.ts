@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deployManifest, restartApp, stopApp, updateApp } from '@manifest-network/manifest-sdk/deploy';
 import type { CosmosClientManager } from '@manifest-network/manifest-sdk';
 import { getCreditAccount } from '../../api/billing';
+import { getReadClient } from '../../api/readClient';
 import { getProviderHealth } from '../../api/provider-api';
 import { getProviders, getSKUs, Unit, type Provider, type SKU } from '../../api/sku';
 import type { ResolvedSkuTier } from '../../api/skuTiers';
@@ -19,6 +20,7 @@ import {
   executeUpdateApp,
 } from './compositeTransactions';
 import { planBatchDeploy } from './batchDeployPlan';
+import { buildBarneyCtx, ProviderNotAllowedError } from './capabilityCtx';
 import type { SigningContext, ToolExecutorOptions } from './types';
 
 const runtime = vi.hoisted(() => ({ allowlist: '' }));
@@ -42,6 +44,7 @@ vi.mock('@manifest-network/manifest-sdk/deploy', async (original) => ({
   ...await original<typeof import('@manifest-network/manifest-sdk/deploy')>(),
   deployManifest: vi.fn(), restartApp: vi.fn(), stopApp: vi.fn(), updateApp: vi.fn(),
 }));
+vi.mock('../../api/readClient', () => ({ getReadClient: vi.fn() }));
 vi.mock('../../utils/errors', () => ({ logError: vi.fn() }));
 
 const MAINNET_URL = 'https://barney.manifest.network/api/fred';
@@ -145,6 +148,64 @@ describe('catalog and deploy paths', () => {
   });
 });
 
+describe('provider URLs the SDK resolves from chain', () => {
+  /** The read client's provider lookup, with `chainUrls` as the on-chain api_url per provider. */
+  function readClient(chainUrls: Record<string, string>) {
+    const billing = { v1: {} };
+    const v1 = {
+      provider: vi.fn(async ({ uuid }: { uuid: string }) => ({ provider: { uuid, apiUrl: chainUrls[uuid] } })),
+      providers: vi.fn(),
+    };
+    const query = { liftedinit: { billing, sku: { v1 } } };
+    vi.mocked(getReadClient).mockResolvedValue({ query } as unknown as Awaited<ReturnType<typeof getReadClient>>);
+    return { query, v1 };
+  }
+
+  it('rejects a lookup resolving outside the allowlist and leaves the rest of the query client untouched', async () => {
+    const { query, v1 } = readClient({ [MAINNET]: `${MAINNET_URL}/`, [AORAKI]: AORAKI_URL });
+    const ctx = await buildBarneyCtx({} as CosmosClientManager, { providerAuth: {} } as SigningContext);
+    const sku = ctx.query.liftedinit.sku.v1;
+    await expect(sku.provider({ uuid: MAINNET })).resolves.toMatchObject({ provider: { apiUrl: `${MAINNET_URL}/` } });
+    await expect(sku.provider({ uuid: AORAKI })).rejects.toBeInstanceOf(ProviderNotAllowedError);
+    expect(sku.providers).toBe(v1.providers);
+    expect(ctx.query.liftedinit.billing).toBe(query.liftedinit.billing);
+
+    runtime.allowlist = '';
+    expect((await buildBarneyCtx({} as CosmosClientManager, { providerAuth: {} } as SigningContext)).query).toBe(query);
+  });
+
+  it('stops a confirmed deploy before create-lease when the planned provider changed its URL on chain', async () => {
+    const actual = await vi.importActual<typeof import('@manifest-network/manifest-sdk/deploy')>('@manifest-network/manifest-sdk/deploy');
+    vi.mocked(deployManifest).mockImplementation(actual.deployManifest);
+    // Planned with mainnet's URL; the provider's on-chain api_url changed since.
+    readClient({ [MAINNET]: AORAKI_URL });
+    const chain = {
+      getAddress: vi.fn().mockResolvedValue(address),
+      acquireRateLimit: vi.fn().mockResolvedValue(undefined),
+      getSigningClient: vi.fn(),
+      withBroadcastLock: vi.fn(),
+    };
+    const providerAuth = { providerToken: vi.fn(), leaseDataToken: vi.fn() };
+    const bytes = new TextEncoder().encode('{"image":"nginx:1.27","ports":{"80/tcp":{}}}');
+
+    const result = await executeConfirmedDeployApp(
+      { app_name: 'web', size: 'docker-micro', skuUuid: `${MAINNET}-sku`, providerUuid: MAINNET, providerUrl: MAINNET_URL },
+      chain as unknown as CosmosClientManager,
+      options({ signing: { providerAuth } as unknown as SigningContext }),
+      { bytes, size: bytes.length, hash: '' },
+    );
+    expect(result).toEqual({
+      success: false,
+      error: `Provider ${MAINNET} is not offered by this deployment. No transaction was submitted.`,
+    });
+    expect(deployManifest).toHaveBeenCalledTimes(1);
+    expect(chain.getSigningClient).not.toHaveBeenCalled();
+    expect(chain.withBroadcastLock).not.toHaveBeenCalled();
+    expect(providerAuth.leaseDataToken).not.toHaveBeenCalled();
+    expect(appRegistry.getApps(address, { includeHidden: true })).toEqual([]);
+  });
+});
+
 describe('apps on other providers', () => {
   const MAINNET_LEASE = '550e8400-e29b-41d4-a716-446655440010';
   const AORAKI_LEASE = '550e8400-e29b-41d4-a716-446655440011';
@@ -165,6 +226,11 @@ describe('apps on other providers', () => {
     expect(restartApp).not.toHaveBeenCalled();
     expect(updateApp).not.toHaveBeenCalled();
     expect(stopApp).not.toHaveBeenCalled();
+  });
+
+  it('keeps their names reserved, so names stay unambiguous if they reappear', async () => {
+    const planned = await executeDeployApp({ image: 'nginx:1.27', app_name: 'aoraki-app' }, options());
+    expect(planned).toMatchObject({ pendingAction: { args: { app_name: 'aoraki-app-2', providerUrl: MAINNET_URL } } });
   });
 
   it('"all" selections cover only apps on allowed providers', async () => {

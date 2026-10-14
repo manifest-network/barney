@@ -224,7 +224,8 @@ describe('PUBLIC_PROVIDER_ALLOWLIST (ENG-1457)', () => {
 
     expect(registry.getApps(address).map(entry => entry.name)).toEqual(['mainnet-app']);
     expect(registry.findApp(address, 'aoraki')).toBeNull();
-    expect(registry.validateAppName('aoraki-app', address)).toBeNull();
+    // Hidden names stay reserved, so they cannot become ambiguous if they reappear.
+    expect(registry.validateAppName('aoraki-app', address)).toContain('is already');
     registry.updateApp(address, LEASE_UUID, { url: 'https://app.example.com' });
     registry.discoverAppsFromChain(address, []);
     expect(registry.getApps(address, { includeHidden: true })).toHaveLength(2);
