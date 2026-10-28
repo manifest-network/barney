@@ -133,6 +133,9 @@ snapshot supplies concrete bundle evidence for that work and the dated
 
 ## Scoped residual dispositions
 
+> Superseded on 2026-10-28 by the [ENG-929 review](../eng-929/README.md), which retires
+> the stream-json disposition and renews elliptic with a new expiry.
+
 These decisions apply only to the named advisory, version, and usage below.
 They do not accept future advisories or other call paths. Review expires
 **2026-10-10**; the owner must remove the dependency, land an upstream fix, or

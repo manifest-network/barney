@@ -1,0 +1,2232 @@
+{
+ "capturedAt": "2026-10-28",
+ "lockfileSha256": "56aa4f94088f6525434989bd4e9cf8458603fac307bdade6669eb13a90504548",
+ "commands": [
+  "npm audit --package-lock-only --json --registry=https://registry.npmjs.org",
+  "npm audit --package-lock-only --omit=dev --json --registry=https://registry.npmjs.org"
+ ],
+ "scopes": {
+  "full": {
+   "counts": {
+    "info": 0,
+    "low": 46,
+    "moderate": 7,
+    "high": 3,
+    "critical": 0,
+    "total": 56
+   },
+   "packages": {
+    "@chain-registry/keplr": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/cosmos",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@cosmos-kit/core"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@chain-registry/keplr"
+     ]
+    },
+    "@cosmjs/amino": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@cosmjs/proto-signing",
+      "@dao-dao/cosmiframe",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/amino"
+     ]
+    },
+    "@cosmjs/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/crypto"
+     ]
+    },
+    "@cosmjs/proto-signing": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "0.25.0-alpha.0 - 0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/proto-signing"
+     ]
+    },
+    "@cosmjs/tendermint-rpc": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/tendermint-rpc"
+     ]
+    },
+    "@cosmos-kit/core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@chain-registry/keplr",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": ">=2.9.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/core"
+     ]
+    },
+    "@cosmos-kit/react": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "effects": [],
+     "range": ">=2.11.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react"
+     ]
+    },
+    "@cosmos-kit/react-lite": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmos-kit/core",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react"
+     ],
+     "range": ">=2.7.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react-lite"
+     ]
+    },
+    "@dao-dao/cosmiframe": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing"
+     ],
+     "effects": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@dao-dao/cosmiframe"
+     ]
+    },
+    "@keplr-wallet/common": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@keplr-wallet/cosmos"
+     ],
+     "range": ">=0.9.0-alpha.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/common",
+      "node_modules/@keplr-wallet/common"
+     ]
+    },
+    "@keplr-wallet/cosmos": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/common",
+      "@keplr-wallet/common",
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [],
+     "range": ">=0.9.10-rc.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/cosmos",
+      "node_modules/@keplr-wallet/cosmos"
+     ]
+    },
+    "@keplr-wallet/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "elliptic"
+     ],
+     "effects": [
+      "@chain-registry/keplr",
+      "@keplr-wallet/common",
+      "@keplr-wallet/cosmos"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@keplr-wallet/common/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/crypto"
+     ]
+    },
+    "@manifest-network/manifest-agent-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-agent-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto",
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-fred": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-fred"
+     ]
+    },
+    "@manifest-network/manifest-sdk": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifestjs"
+     ],
+     "effects": [],
+     "range": ">=0.19.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-sdk"
+     ]
+    },
+    "@manifest-network/manifestjs": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifestjs"
+     ]
+    },
+    "@manifest-network/stargate": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc"
+     ],
+     "effects": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifestjs"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmjs/stargate"
+     ]
+    },
+    "@manifest-network/web3auth": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmos-kit/core",
+      "@keplr-wallet/cosmos",
+      "@toruslabs/eccrypto",
+      "@web3auth/auth",
+      "@web3auth/modal"
+     ],
+     "effects": [],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmos-kit/web3auth"
+     ]
+    },
+    "@rsbuild/plugin-node-polyfill": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "crypto-browserify"
+     ],
+     "effects": [],
+     "range": "<=0.0.0-next-20240528072128 || 0.3.7 - 1.0.0-alpha.0 || >=1.0.1",
+     "nodes": [
+      "node_modules/@rsbuild/plugin-node-polyfill"
+     ]
+    },
+    "@solana/web3.js": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      "jayson"
+     ],
+     "effects": [],
+     "range": "1.99.0-beta.0 - 1.99.0",
+     "nodes": [
+      "node_modules/@solana/web3.js"
+     ]
+    },
+    "@toruslabs/base-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth"
+     ],
+     "effects": [
+      "@toruslabs/ethereum-controllers"
+     ],
+     "range": "0.4.0 - 1.3.0 || >=1.6.16",
+     "nodes": [
+      "node_modules/@toruslabs/base-controllers"
+     ]
+    },
+    "@toruslabs/broadcast-channel": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth"
+     ],
+     "range": "<=12.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/broadcast-channel"
+     ]
+    },
+    "@toruslabs/customauth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/eccrypto",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/customauth"
+     ]
+    },
+    "@toruslabs/eccrypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/torus.js"
+     ],
+     "range": "<=6.2.0",
+     "nodes": [
+      "node_modules/@toruslabs/eccrypto"
+     ]
+    },
+    "@toruslabs/ethereum-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=5.10.0",
+     "nodes": [
+      "node_modules/@toruslabs/ethereum-controllers"
+     ]
+    },
+    "@toruslabs/fetch-node-details": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/http-helpers"
+     ],
+     "effects": [],
+     "range": ">=14.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/fetch-node-details"
+     ]
+    },
+    "@toruslabs/http-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "@web3auth/modal"
+     ],
+     "range": "1.0.1 - 1.4.0 || >=7.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/http-helpers"
+     ]
+    },
+    "@toruslabs/metadata-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/customauth",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/metadata-helpers"
+     ]
+    },
+    "@toruslabs/secure-pub-sub": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/secure-pub-sub"
+     ]
+    },
+    "@toruslabs/session-manager": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/session-manager"
+     ]
+    },
+    "@toruslabs/starkware-crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/starkware-crypto"
+     ]
+    },
+    "@toruslabs/torus.js": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/torus.js"
+     ]
+    },
+    "@vanilla-extract/css": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [],
+     "range": "<=0.0.0-vite-plugin-new-20240116010153 || 1.4.0 - 1.21.2",
+     "nodes": [
+      "node_modules/@vanilla-extract/css"
+     ]
+    },
+    "@vitest/coverage-v8": {
+     "severity": "moderate",
+     "isDirect": true,
+     "via": [
+      "vitest"
+     ],
+     "effects": [
+      "vitest"
+     ],
+     "range": "2.1.0-beta.1 - 4.1.11",
+     "nodes": [
+      "node_modules/@vitest/coverage-v8"
+     ]
+    },
+    "@vitest/mocker": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1242767,
+       "name": "@vitest/mocker",
+       "dependency": "@vitest/mocker",
+       "title": "Vitest: Code injection via unauthenticated manual mock registration",
+       "url": "https://github.com/advisories/GHSA-qxg6-89mg-rqv8",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-94",
+        "CWE-116",
+        "CWE-306"
+       ],
+       "cvss": {
+        "score": 4.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
+       },
+       "range": ">=2.1.0-beta.7 <4.1.12"
+      },
+      {
+       "source": 1242769,
+       "name": "@vitest/mocker",
+       "dependency": "@vitest/mocker",
+       "title": "Vitest: Windows backslash traversal bypasses the @vitest/mocker redirect allowlist fix",
+       "url": "https://github.com/advisories/GHSA-xp26-3454-mjgp",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-22"
+       ],
+       "cvss": {
+        "score": 5.9,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+       },
+       "range": ">=4.1.11 <4.1.12"
+      }
+     ],
+     "effects": [
+      "vitest"
+     ],
+     "range": "<=4.1.11",
+     "nodes": [
+      "node_modules/@vitest/mocker"
+     ]
+    },
+    "@web3auth/auth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/customauth",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/starkware-crypto",
+      "deepmerge"
+     ],
+     "effects": [
+      "@manifest-network/web3auth",
+      "@toruslabs/base-controllers",
+      "@toruslabs/ethereum-controllers",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@web3auth/auth"
+     ]
+    },
+    "@web3auth/modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "@web3auth/no-modal",
+      "deepmerge"
+     ],
+     "effects": [],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/modal"
+     ]
+    },
+    "@web3auth/no-modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/eccrypto",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@web3auth/auth",
+      "@web3auth/ws-embed",
+      "deepmerge",
+      "ripple-keypairs",
+      "xrpl"
+     ],
+     "effects": [],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/no-modal"
+     ]
+    },
+    "@web3auth/ws-embed": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=5.0.0",
+     "nodes": [
+      "node_modules/@web3auth/ws-embed"
+     ]
+    },
+    "bip32": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "tiny-secp256k1"
+     ],
+     "effects": [
+      "@keplr-wallet/crypto",
+      "xrpl"
+     ],
+     "range": "1.0.1 - 2.0.6",
+     "nodes": [
+      "node_modules/bip32"
+     ]
+    },
+    "brace-expansion": {
+     "severity": "high",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1240100,
+       "name": "brace-expansion",
+       "dependency": "brace-expansion",
+       "title": "brace-expansion: Quadratic-time expansion of the `{a},b}` rewrite causes CPU denial of service",
+       "url": "https://github.com/advisories/GHSA-q2hr-2g5m-vwhr",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-400",
+        "CWE-407"
+       ],
+       "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+       },
+       "range": "<1.1.21"
+      },
+      {
+       "source": 1240101,
+       "name": "brace-expansion",
+       "dependency": "brace-expansion",
+       "title": "brace-expansion: Quadratic-time expansion of the `{a},b}` rewrite causes CPU denial of service",
+       "url": "https://github.com/advisories/GHSA-q2hr-2g5m-vwhr",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-400",
+        "CWE-407"
+       ],
+       "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+       },
+       "range": ">=2.0.0 <2.1.7"
+      },
+      {
+       "source": 1240104,
+       "name": "brace-expansion",
+       "dependency": "brace-expansion",
+       "title": "brace-expansion: DoS via uncontrolled recursion on nested brace groups causing stack exhaustion",
+       "url": "https://github.com/advisories/GHSA-qhr7-859c-m2p7",
+       "severity": "high",
+       "cwe": [
+        "CWE-400",
+        "CWE-674"
+       ],
+       "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": "<1.1.20"
+      },
+      {
+       "source": 1240105,
+       "name": "brace-expansion",
+       "dependency": "brace-expansion",
+       "title": "brace-expansion: DoS via uncontrolled recursion on nested brace groups causing stack exhaustion",
+       "url": "https://github.com/advisories/GHSA-qhr7-859c-m2p7",
+       "severity": "high",
+       "cwe": [
+        "CWE-400",
+        "CWE-674"
+       ],
+       "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": ">=2.0.0 <2.1.6"
+      },
+      {
+       "source": 1240108,
+       "name": "brace-expansion",
+       "dependency": "brace-expansion",
+       "title": "brace-expansion: DoS via uncontrolled recursion in parseCommaParts causing stack exhaustion",
+       "url": "https://github.com/advisories/GHSA-6j4f-fj2g-mc7p",
+       "severity": "high",
+       "cwe": [
+        "CWE-400",
+        "CWE-674"
+       ],
+       "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": "<1.1.19"
+      },
+      {
+       "source": 1240109,
+       "name": "brace-expansion",
+       "dependency": "brace-expansion",
+       "title": "brace-expansion: DoS via uncontrolled recursion in parseCommaParts causing stack exhaustion",
+       "url": "https://github.com/advisories/GHSA-6j4f-fj2g-mc7p",
+       "severity": "high",
+       "cwe": [
+        "CWE-400",
+        "CWE-674"
+       ],
+       "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": ">=2.0.0 <2.1.5"
+      }
+     ],
+     "effects": [],
+     "range": "<=1.1.20 || 2.0.0 - 2.1.6",
+     "nodes": [
+      "node_modules/@typescript-eslint/typescript-estree/node_modules/brace-expansion",
+      "node_modules/brace-expansion"
+     ]
+    },
+    "browserify-sign": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "crypto-browserify"
+     ],
+     "range": ">=2.4.0",
+     "nodes": [
+      "node_modules/browserify-sign"
+     ]
+    },
+    "create-ecdh": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "crypto-browserify"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/create-ecdh"
+     ]
+    },
+    "crypto-browserify": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "browserify-sign",
+      "create-ecdh"
+     ],
+     "effects": [
+      "@rsbuild/plugin-node-polyfill"
+     ],
+     "range": ">=3.4.0",
+     "nodes": [
+      "node_modules/crypto-browserify"
+     ]
+    },
+    "deepmerge": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1243505,
+       "name": "deepmerge",
+       "dependency": "deepmerge",
+       "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+       "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4",
+       "severity": "low",
+       "cwe": [
+        "CWE-1321"
+       ],
+       "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+       },
+       "range": ">=4.2.0 <=4.3.1"
+      }
+     ],
+     "effects": [
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@vanilla-extract/css",
+      "@web3auth/auth",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": ">=4.2.0",
+     "nodes": [
+      "node_modules/deepmerge"
+     ]
+    },
+    "elliptic": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1112030,
+       "name": "elliptic",
+       "dependency": "elliptic",
+       "title": "Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
+       "url": "https://github.com/advisories/GHSA-848j-6mx2-7j84",
+       "severity": "low",
+       "cwe": [
+        "CWE-1240"
+       ],
+       "cvss": {
+        "score": 5.6,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
+       },
+       "range": "<=6.6.1"
+      }
+     ],
+     "effects": [
+      "@cosmjs/crypto",
+      "@keplr-wallet/crypto",
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/starkware-crypto",
+      "@toruslabs/torus.js",
+      "browserify-sign",
+      "create-ecdh",
+      "ripple-keypairs",
+      "tiny-secp256k1"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/elliptic"
+     ]
+    },
+    "happy-dom": {
+     "severity": "high",
+     "isDirect": true,
+     "via": [
+      {
+       "source": 1243084,
+       "name": "happy-dom",
+       "dependency": "happy-dom",
+       "title": "Happy DOM: Incomplete fix for CVE-2026-33943: unsanitized import alias leads to host code execution",
+       "url": "https://github.com/advisories/GHSA-834v-8h66-3h79",
+       "severity": "high",
+       "cwe": [
+        "CWE-94"
+       ],
+       "cvss": {
+        "score": 8.8,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+       },
+       "range": ">=17.0.0 <=21.0.3"
+      }
+     ],
+     "effects": [],
+     "range": "17.0.0 - 21.0.3",
+     "nodes": [
+      "node_modules/happy-dom"
+     ]
+    },
+    "jayson": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      "stream-json"
+     ],
+     "effects": [
+      "@solana/web3.js"
+     ],
+     "range": "4.2.0 - 4.3.0",
+     "nodes": [
+      "node_modules/jayson"
+     ]
+    },
+    "pbkdf2": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1241333,
+       "name": "pbkdf2",
+       "dependency": "pbkdf2",
+       "title": "pbkdf2 rehashes long passwords on every iteration, enabling denial of service",
+       "url": "https://github.com/advisories/GHSA-477h-4r7f-fvrx",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-400"
+       ],
+       "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+       },
+       "range": "<=3.1.6"
+      }
+     ],
+     "effects": [],
+     "range": "<=3.1.6",
+     "nodes": [
+      "node_modules/pbkdf2"
+     ]
+    },
+    "ripple-keypairs": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "xrpl"
+     ],
+     "range": "<=1.4.0",
+     "nodes": [
+      "node_modules/ripple-keypairs"
+     ]
+    },
+    "stream-json": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1164823,
+       "name": "stream-json",
+       "dependency": "stream-json",
+       "title": "stream-json: pick/ignore/filter/replace filters are O(depth\u00b2) on nested input \u2014 small crafted JSON blocks the event loop for seconds\u2192minutes (DoS)",
+       "url": "https://github.com/advisories/GHSA-528h-pc64-c93x",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-407"
+       ],
+       "cvss": {
+        "score": 6.2,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": "<=3.4.0"
+      },
+      {
+       "source": 1241262,
+       "name": "stream-json",
+       "dependency": "stream-json",
+       "title": "stream-json: JSONC parser and verifier re-scan the whole accumulated comment on every input chunk",
+       "url": "https://github.com/advisories/GHSA-hqr4-qq8f-hg3x",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-407"
+       ],
+       "cvss": {
+        "score": 6.2,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": "<=3.5.0"
+      },
+      {
+       "source": 1241263,
+       "name": "stream-json",
+       "dependency": "stream-json",
+       "title": "stream-json has a prototype pollution issue: Assembler writes this.current[this.key] on plain objects",
+       "url": "https://github.com/advisories/GHSA-mjw6-4jj6-33hc",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-1321"
+       ],
+       "cvss": {
+        "score": 5.1,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+       },
+       "range": "<3.6.0"
+      }
+     ],
+     "effects": [
+      "jayson"
+     ],
+     "range": "<=3.5.0",
+     "nodes": [
+      "node_modules/stream-json"
+     ]
+    },
+    "tiny-secp256k1": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "bip32"
+     ],
+     "range": "0.0.0-rc-1560324438 || 0.2.0 - 1.1.7",
+     "nodes": [
+      "node_modules/tiny-secp256k1"
+     ]
+    },
+    "vite": {
+     "severity": "high",
+     "isDirect": true,
+     "via": [
+      {
+       "source": 1242623,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "launch-editor: escapeCmdArgs() omits % escaping on Windows",
+       "url": "https://github.com/advisories/GHSA-698v-4r3x-3vcv",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-78"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242652,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors",
+       "url": "https://github.com/advisories/GHSA-r825-w8mm-5pxw",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-88"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242659,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "launch-editor: `fs.existsSync()` existence check can be bypassed on Windows",
+       "url": "https://github.com/advisories/GHSA-587h-7wmj-h5pm",
+       "severity": "high",
+       "cwe": [
+        "CWE-77"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242725,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "Vite: Cross origin script execution through Vite custom middleware",
+       "url": "https://github.com/advisories/GHSA-9jrq-w75r-8gcw",
+       "severity": "low",
+       "cwe": [
+        "CWE-80"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242731,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine",
+       "url": "https://github.com/advisories/GHSA-rq7h-c2jc-7f22",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-22",
+        "CWE-284"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      }
+     ],
+     "effects": [],
+     "range": "7.0.0 - 7.3.6",
+     "nodes": [
+      "node_modules/vite"
+     ]
+    },
+    "vitest": {
+     "severity": "moderate",
+     "isDirect": true,
+     "via": [
+      "@vitest/coverage-v8",
+      "@vitest/mocker"
+     ],
+     "effects": [
+      "@vitest/coverage-v8"
+     ],
+     "range": "2.1.0-beta.1 - 4.1.11",
+     "nodes": [
+      "node_modules/vitest"
+     ]
+    },
+    "xrpl": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "ripple-keypairs"
+     ],
+     "effects": [],
+     "range": "<=2.15.0",
+     "nodes": [
+      "node_modules/xrpl"
+     ]
+    }
+   }
+  },
+  "production": {
+   "counts": {
+    "info": 0,
+    "low": 42,
+    "moderate": 6,
+    "high": 2,
+    "critical": 0,
+    "total": 50
+   },
+   "packages": {
+    "@chain-registry/keplr": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/cosmos",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@cosmos-kit/core"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@chain-registry/keplr"
+     ]
+    },
+    "@cosmjs/amino": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@cosmjs/proto-signing",
+      "@dao-dao/cosmiframe",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/amino"
+     ]
+    },
+    "@cosmjs/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/crypto"
+     ]
+    },
+    "@cosmjs/proto-signing": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "0.25.0-alpha.0 - 0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/proto-signing"
+     ]
+    },
+    "@cosmjs/tendermint-rpc": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/tendermint-rpc"
+     ]
+    },
+    "@cosmos-kit/core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@chain-registry/keplr",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": ">=2.9.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/core"
+     ]
+    },
+    "@cosmos-kit/react": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "effects": [],
+     "range": ">=2.11.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react"
+     ]
+    },
+    "@cosmos-kit/react-lite": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmos-kit/core",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react"
+     ],
+     "range": ">=2.7.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react-lite"
+     ]
+    },
+    "@dao-dao/cosmiframe": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing"
+     ],
+     "effects": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@dao-dao/cosmiframe"
+     ]
+    },
+    "@keplr-wallet/common": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@keplr-wallet/cosmos"
+     ],
+     "range": ">=0.9.0-alpha.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/common",
+      "node_modules/@keplr-wallet/common"
+     ]
+    },
+    "@keplr-wallet/cosmos": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/common",
+      "@keplr-wallet/common",
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [],
+     "range": ">=0.9.10-rc.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/cosmos",
+      "node_modules/@keplr-wallet/cosmos"
+     ]
+    },
+    "@keplr-wallet/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "elliptic"
+     ],
+     "effects": [
+      "@chain-registry/keplr",
+      "@keplr-wallet/common",
+      "@keplr-wallet/cosmos"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@keplr-wallet/common/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/crypto"
+     ]
+    },
+    "@manifest-network/manifest-agent-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-agent-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto",
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-fred": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-fred"
+     ]
+    },
+    "@manifest-network/manifest-sdk": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifestjs"
+     ],
+     "effects": [],
+     "range": ">=0.19.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-sdk"
+     ]
+    },
+    "@manifest-network/manifestjs": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifestjs"
+     ]
+    },
+    "@manifest-network/stargate": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc"
+     ],
+     "effects": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifestjs"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmjs/stargate"
+     ]
+    },
+    "@manifest-network/web3auth": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmos-kit/core",
+      "@keplr-wallet/cosmos",
+      "@toruslabs/eccrypto",
+      "@web3auth/auth",
+      "@web3auth/modal"
+     ],
+     "effects": [],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmos-kit/web3auth"
+     ]
+    },
+    "@solana/web3.js": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      "jayson"
+     ],
+     "effects": [],
+     "range": "1.99.0-beta.0 - 1.99.0",
+     "nodes": [
+      "node_modules/@solana/web3.js"
+     ]
+    },
+    "@toruslabs/base-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth"
+     ],
+     "effects": [
+      "@web3auth/ws-embed"
+     ],
+     "range": "0.4.0 - 1.3.0 || >=1.6.16",
+     "nodes": [
+      "node_modules/@toruslabs/base-controllers"
+     ]
+    },
+    "@toruslabs/broadcast-channel": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth"
+     ],
+     "range": "<=12.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/broadcast-channel"
+     ]
+    },
+    "@toruslabs/customauth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/eccrypto",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/customauth"
+     ]
+    },
+    "@toruslabs/eccrypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/torus.js"
+     ],
+     "range": "<=6.2.0",
+     "nodes": [
+      "node_modules/@toruslabs/eccrypto"
+     ]
+    },
+    "@toruslabs/ethereum-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=5.10.0",
+     "nodes": [
+      "node_modules/@toruslabs/ethereum-controllers"
+     ]
+    },
+    "@toruslabs/fetch-node-details": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/http-helpers"
+     ],
+     "effects": [],
+     "range": ">=14.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/fetch-node-details"
+     ]
+    },
+    "@toruslabs/http-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "@web3auth/modal"
+     ],
+     "range": "1.0.1 - 1.4.0 || >=7.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/http-helpers"
+     ]
+    },
+    "@toruslabs/metadata-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/customauth",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/metadata-helpers"
+     ]
+    },
+    "@toruslabs/secure-pub-sub": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/secure-pub-sub"
+     ]
+    },
+    "@toruslabs/session-manager": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/session-manager"
+     ]
+    },
+    "@toruslabs/starkware-crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/starkware-crypto"
+     ]
+    },
+    "@toruslabs/torus.js": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/torus.js"
+     ]
+    },
+    "@vanilla-extract/css": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [],
+     "range": "<=0.0.0-vite-plugin-new-20240116010153 || 1.4.0 - 1.21.2",
+     "nodes": [
+      "node_modules/@vanilla-extract/css"
+     ]
+    },
+    "@vitest/coverage-v8": {
+     "severity": "moderate",
+     "isDirect": true,
+     "via": [
+      "vitest"
+     ],
+     "effects": [
+      "vitest"
+     ],
+     "range": "2.1.0-beta.1 - 4.1.11",
+     "nodes": [
+      "node_modules/@vitest/coverage-v8"
+     ]
+    },
+    "@vitest/mocker": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1242767,
+       "name": "@vitest/mocker",
+       "dependency": "@vitest/mocker",
+       "title": "Vitest: Code injection via unauthenticated manual mock registration",
+       "url": "https://github.com/advisories/GHSA-qxg6-89mg-rqv8",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-94",
+        "CWE-116",
+        "CWE-306"
+       ],
+       "cvss": {
+        "score": 4.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:L/I:L/A:N"
+       },
+       "range": ">=2.1.0-beta.7 <4.1.12"
+      },
+      {
+       "source": 1242769,
+       "name": "@vitest/mocker",
+       "dependency": "@vitest/mocker",
+       "title": "Vitest: Windows backslash traversal bypasses the @vitest/mocker redirect allowlist fix",
+       "url": "https://github.com/advisories/GHSA-xp26-3454-mjgp",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-22"
+       ],
+       "cvss": {
+        "score": 5.9,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+       },
+       "range": ">=4.1.11 <4.1.12"
+      }
+     ],
+     "effects": [
+      "vitest"
+     ],
+     "range": "<=4.1.11",
+     "nodes": [
+      "node_modules/@vitest/mocker"
+     ]
+    },
+    "@web3auth/auth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/customauth",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/starkware-crypto",
+      "deepmerge"
+     ],
+     "effects": [
+      "@manifest-network/web3auth",
+      "@toruslabs/base-controllers",
+      "@toruslabs/ethereum-controllers",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@web3auth/auth"
+     ]
+    },
+    "@web3auth/modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "@web3auth/no-modal",
+      "deepmerge"
+     ],
+     "effects": [],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/modal"
+     ]
+    },
+    "@web3auth/no-modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/eccrypto",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@web3auth/auth",
+      "@web3auth/ws-embed",
+      "deepmerge",
+      "ripple-keypairs",
+      "xrpl"
+     ],
+     "effects": [],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/no-modal"
+     ]
+    },
+    "@web3auth/ws-embed": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=3.0.0",
+     "nodes": [
+      "node_modules/@web3auth/ws-embed"
+     ]
+    },
+    "bip32": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "tiny-secp256k1"
+     ],
+     "effects": [
+      "@keplr-wallet/crypto",
+      "xrpl"
+     ],
+     "range": "1.0.1 - 2.0.6",
+     "nodes": [
+      "node_modules/bip32"
+     ]
+    },
+    "deepmerge": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1243505,
+       "name": "deepmerge",
+       "dependency": "deepmerge",
+       "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+       "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4",
+       "severity": "low",
+       "cwe": [
+        "CWE-1321"
+       ],
+       "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+       },
+       "range": ">=4.2.0 <=4.3.1"
+      }
+     ],
+     "effects": [
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@vanilla-extract/css",
+      "@web3auth/auth",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": ">=4.2.0",
+     "nodes": [
+      "node_modules/deepmerge"
+     ]
+    },
+    "elliptic": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1112030,
+       "name": "elliptic",
+       "dependency": "elliptic",
+       "title": "Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
+       "url": "https://github.com/advisories/GHSA-848j-6mx2-7j84",
+       "severity": "low",
+       "cwe": [
+        "CWE-1240"
+       ],
+       "cvss": {
+        "score": 5.6,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
+       },
+       "range": "<=6.6.1"
+      }
+     ],
+     "effects": [
+      "@cosmjs/crypto",
+      "@keplr-wallet/crypto",
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/starkware-crypto",
+      "@toruslabs/torus.js",
+      "ripple-keypairs",
+      "tiny-secp256k1"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/elliptic"
+     ]
+    },
+    "happy-dom": {
+     "severity": "high",
+     "isDirect": true,
+     "via": [
+      {
+       "source": 1243084,
+       "name": "happy-dom",
+       "dependency": "happy-dom",
+       "title": "Happy DOM: Incomplete fix for CVE-2026-33943: unsanitized import alias leads to host code execution",
+       "url": "https://github.com/advisories/GHSA-834v-8h66-3h79",
+       "severity": "high",
+       "cwe": [
+        "CWE-94"
+       ],
+       "cvss": {
+        "score": 8.8,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+       },
+       "range": ">=17.0.0 <=21.0.3"
+      }
+     ],
+     "effects": [],
+     "range": "17.0.0 - 21.0.3",
+     "nodes": [
+      "node_modules/happy-dom"
+     ]
+    },
+    "jayson": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      "stream-json"
+     ],
+     "effects": [
+      "@solana/web3.js"
+     ],
+     "range": "4.2.0 - 4.3.0",
+     "nodes": [
+      "node_modules/jayson"
+     ]
+    },
+    "ripple-keypairs": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "xrpl"
+     ],
+     "range": "<=1.4.0",
+     "nodes": [
+      "node_modules/ripple-keypairs"
+     ]
+    },
+    "stream-json": {
+     "severity": "moderate",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1164823,
+       "name": "stream-json",
+       "dependency": "stream-json",
+       "title": "stream-json: pick/ignore/filter/replace filters are O(depth\u00b2) on nested input \u2014 small crafted JSON blocks the event loop for seconds\u2192minutes (DoS)",
+       "url": "https://github.com/advisories/GHSA-528h-pc64-c93x",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-407"
+       ],
+       "cvss": {
+        "score": 6.2,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": "<=3.4.0"
+      },
+      {
+       "source": 1241262,
+       "name": "stream-json",
+       "dependency": "stream-json",
+       "title": "stream-json: JSONC parser and verifier re-scan the whole accumulated comment on every input chunk",
+       "url": "https://github.com/advisories/GHSA-hqr4-qq8f-hg3x",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-407"
+       ],
+       "cvss": {
+        "score": 6.2,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+       },
+       "range": "<=3.5.0"
+      },
+      {
+       "source": 1241263,
+       "name": "stream-json",
+       "dependency": "stream-json",
+       "title": "stream-json has a prototype pollution issue: Assembler writes this.current[this.key] on plain objects",
+       "url": "https://github.com/advisories/GHSA-mjw6-4jj6-33hc",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-1321"
+       ],
+       "cvss": {
+        "score": 5.1,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+       },
+       "range": "<3.6.0"
+      }
+     ],
+     "effects": [
+      "jayson"
+     ],
+     "range": "<=3.5.0",
+     "nodes": [
+      "node_modules/stream-json"
+     ]
+    },
+    "tiny-secp256k1": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "bip32"
+     ],
+     "range": "0.0.0-rc-1560324438 || 0.2.0 - 1.1.7",
+     "nodes": [
+      "node_modules/tiny-secp256k1"
+     ]
+    },
+    "vite": {
+     "severity": "high",
+     "isDirect": true,
+     "via": [
+      {
+       "source": 1242623,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "launch-editor: escapeCmdArgs() omits % escaping on Windows",
+       "url": "https://github.com/advisories/GHSA-698v-4r3x-3vcv",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-78"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242652,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors",
+       "url": "https://github.com/advisories/GHSA-r825-w8mm-5pxw",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-88"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242659,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "launch-editor: `fs.existsSync()` existence check can be bypassed on Windows",
+       "url": "https://github.com/advisories/GHSA-587h-7wmj-h5pm",
+       "severity": "high",
+       "cwe": [
+        "CWE-77"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242725,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "Vite: Cross origin script execution through Vite custom middleware",
+       "url": "https://github.com/advisories/GHSA-9jrq-w75r-8gcw",
+       "severity": "low",
+       "cwe": [
+        "CWE-80"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      },
+      {
+       "source": 1242731,
+       "name": "vite",
+       "dependency": "vite",
+       "title": "Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine",
+       "url": "https://github.com/advisories/GHSA-rq7h-c2jc-7f22",
+       "severity": "moderate",
+       "cwe": [
+        "CWE-22",
+        "CWE-284"
+       ],
+       "cvss": {
+        "score": 0,
+        "vectorString": null
+       },
+       "range": ">=7.0.0 <=7.3.6"
+      }
+     ],
+     "effects": [],
+     "range": "7.0.0 - 7.3.6",
+     "nodes": [
+      "node_modules/vite"
+     ]
+    },
+    "vitest": {
+     "severity": "moderate",
+     "isDirect": true,
+     "via": [
+      "@vitest/coverage-v8",
+      "@vitest/mocker"
+     ],
+     "effects": [
+      "@vitest/coverage-v8"
+     ],
+     "range": "2.1.0-beta.1 - 4.1.11",
+     "nodes": [
+      "node_modules/vitest"
+     ]
+    },
+    "xrpl": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "ripple-keypairs"
+     ],
+     "effects": [],
+     "range": "<=2.15.0",
+     "nodes": [
+      "node_modules/xrpl"
+     ]
+    }
+   }
+  }
+ }
+}

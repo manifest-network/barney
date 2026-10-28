@@ -170,16 +170,19 @@ The signature is over a deterministic payload — the provider can verify the us
 ## Dependency advisories
 
 The [ENG-832 audit](../audits/eng-832/README.md) records locked-graph findings,
-browser/build/relay reachability, dependency overrides, and scoped residual
-dispositions with an owner and expiry. Async Storage's React Native peer uses
+browser/build/relay reachability, and dependency overrides. The
+[ENG-929 review](../audits/eng-929/README.md) supersedes its residual dispositions
+with a new owner and expiry. Async Storage's React Native peer uses
 React Native Web for this browser application, avoiding the native Metro/image-size
 toolchain. Reassess that override before adding any native application target.
-The browser build rejects stream-json imports; it does not belong on an app path.
+The Jayson override removes stream-json from the graph; the browser build still
+rejects stream-json imports.
 
 The remaining elliptic advisory is reachable through wallet cryptography and
 requires a coordinated Manifest SDK and Torus migration. Signature compatibility
-tests do not eliminate that upstream risk. Run full and production-only audits
-after dependency changes and review new findings individually.
+tests do not eliminate that upstream risk. The deepmerge advisory has no patched
+release and is limited to Web3Auth, Torus, and style configuration merges. Run full
+and production-only audits after dependency changes and review new findings individually.
 
 ## Reporting vulnerabilities
 
