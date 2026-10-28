@@ -96,7 +96,7 @@ You attached an oversized manifest (raw input) or asked for a stack with too man
 ### Restart or update outcome is unconfirmed
 
 Check the app's status and releases. The provider may still execute a pending
-command after a timeout or lost response. On dev's PR240 provider, ask Barney to
+command after a timeout or lost response. On a PR240 provider (Fred v0.14 or later, including dev's), ask Barney to
 retry the same restart, or retry the update using only the app name; it recovers
 the saved command. For a bulk restart, retrying "all" recovers only unresolved
 restarts. Legacy v0.13 providers cannot deduplicate requests: inspect status and

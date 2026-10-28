@@ -1,13 +1,44 @@
 import { ProviderApiError } from '@manifest-network/manifest-sdk/deploy';
 import type { MaintenanceOperation } from './maintenanceOperation';
 
+/** A durable Fred answer that settles the command it names. */
+export interface SettledMaintenanceRefusal {
+  readonly detail: string;
+  /**
+   * Fred also reported the lease's workload gone. Its `/status` answers the same
+   * lease with `provision_status: failed`, so the registry can record that verdict.
+   */
+  readonly workloadLost: boolean;
+}
+
+/**
+ * Fred v0.14 durable 410 receipts, keyed by the error body's `reason`. Both are
+ * immutable terminal outcomes for the command key: retrying it receives the
+ * same answer, and neither command ran. Barney authors the text because the
+ * reason is the contract and the message is not.
+ */
+const DEFINITIVE_GONE_RECEIPTS: Readonly<Record<string, SettledMaintenanceRefusal>> = {
+  maintenance_expired: {
+    detail: 'the provider no longer retains this command in the lease\'s maintenance history, so it was not run. ' +
+      'If it is still needed, send it again as a new command',
+    workloadLost: false,
+  },
+  backend_storage_lost: {
+    detail: 'the provider irrecoverably lost the storage holding this app, so the app and its data on this provider ' +
+      'are gone and the command did not run. Restart and update cannot succeed for it. Release it with stop_app, ' +
+      'because the lease can remain active and billing, then deploy again and restore data from your own backups',
+    workloadLost: true,
+  },
+};
+
 /**
  * Fred f42a639 persists maintenance validation refusals and these exact 404/409
- * receipts. Its route has five distinct pre-admission 400 messages; those do
- * not establish settlement. Keep this classifier tied to that Fred contract
- * until the tenant API exposes structured receipt codes.
+ * receipts; Fred v0.14 adds the reasoned 410 receipts above. Its route has five
+ * distinct pre-admission 400 messages; those do not establish settlement. Keep
+ * this classifier tied to that Fred contract until the tenant API exposes
+ * structured receipt codes for every outcome.
  */
-export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOperation): string | undefined {
+export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOperation): SettledMaintenanceRefusal | undefined {
   try {
     if (typeof error !== 'object' || error === null) return undefined;
     const outer = error as { code?: unknown; details?: Record<string, unknown> };
@@ -17,7 +48,7 @@ export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOp
       || details.idempotency_key !== command.idempotencyKey
       || details.operation !== command.operation
       || details.outcome !== 'unknown'
-      || ![400, 404, 409].includes(details.provider_status as number)) return undefined;
+      || ![400, 404, 409, 410].includes(details.provider_status as number)) return undefined;
 
     const expected = details.provider_status === 404
       ? 'lease not yet provisioned'
@@ -34,6 +65,15 @@ export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOp
           const body: unknown = JSON.parse(cause.message);
           if (typeof body === 'object' && body !== null && !Array.isArray(body)) {
             const receipt = body as Record<string, unknown>;
+            if (cause.status === 410) {
+              // `details.provider_reason` is the SDK's parse of this same body.
+              const reason = receipt.reason;
+              if (receipt.code !== 410 || typeof receipt.error !== 'string' || typeof reason !== 'string'
+                || details.provider_reason !== reason
+                || !Object.keys(receipt).every((key) => key === 'code' || key === 'error' || key === 'reason')
+                || !Object.hasOwn(DEFINITIVE_GONE_RECEIPTS, reason)) return undefined;
+              return DEFINITIVE_GONE_RECEIPTS[reason];
+            }
             if (receipt.code !== cause.status || typeof receipt.error !== 'string'
               || !Object.keys(receipt).every((key) => key === 'code' || key === 'error')) return undefined;
             if (cause.status === 400) {
@@ -53,8 +93,8 @@ export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOp
                   const code = character.codePointAt(0)!;
                   return code > 31 && (code < 127 || code > 159);
                 })
-                && !preAdmissionErrors.has(detail)) return detail;
-            } else if (receipt.error === expected) return expected;
+                && !preAdmissionErrors.has(detail)) return { detail, workloadLost: false };
+            } else if (receipt.error === expected) return { detail: expected, workloadLost: false };
           }
         } catch {
           // Malformed/truncated error bodies cannot establish a durable receipt.

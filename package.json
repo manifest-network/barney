@@ -28,7 +28,7 @@
     "protobufjs": "7.6.6",
     "uuid": "11.1.1",
     "ws@^7": "7.5.13",
-    "ws@^8": "8.21.3"
+    "ws@^8": "8.22.0"
   },
   "dependencies": {
     "@chain-registry/types": "0.50.297",
@@ -37,18 +37,18 @@
     "@cosmos-kit/react": "2.22.3",
     "@cosmos-kit/web3auth": "npm:@manifest-network/web3auth@2.16.6-ll.1",
     "@interchain-ui/react": "1.26.3",
-    "@manifest-network/manifest-sdk": "0.23.0",
+    "@manifest-network/manifest-sdk": "0.24.0",
     "@manifest-network/manifestjs": "4.0.0",
     "axios": "1.20.0",
     "clsx": "2.1.1",
     "focus-trap-react": "12.0.0",
-    "ipaddr.js": "2.3.0",
+    "ipaddr.js": "2.5.0",
     "lucide-react": "0.563.0",
     "next-themes": "0.4.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tldts": "7.0.30",
-    "zod": "4.3.6",
+    "zod": "4.6.7",
     "zustand": "5.0.11"
   },
   "optionalDependencies": {

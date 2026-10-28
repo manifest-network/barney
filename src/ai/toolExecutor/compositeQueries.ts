@@ -950,6 +950,15 @@ export async function executeAppDiagnostics(
         ...(failure?.message !== undefined && { message: sanitizeForDisplay(failure.message, DIAGNOSTIC_MESSAGE_CHARS) }),
         ...(provision.last_error !== undefined && { last_error: sanitizeForDisplay(provision.last_error, DIAGNOSTIC_MESSAGE_CHARS) }),
         ...(nextStep !== undefined && { next_step: nextStep }),
+        // Fred v0.14 closes an ACTIVE lease for repeated failure only on an
+        // `exhausted` verdict; there `fail_count` is a lifetime diagnostic. The
+        // verdict is provider-authored and open, so it is bounded, not switched on.
+        ...(provision.terminal_budget !== undefined && {
+          terminal_budget: {
+            verdict: sanitizeForDisplay(provision.terminal_budget.verdict, DIAGNOSTIC_REASON_CHARS),
+            consecutive_failures: provision.terminal_budget.consecutive_failures,
+          },
+        }),
       },
     };
   } catch (error) {

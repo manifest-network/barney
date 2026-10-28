@@ -311,6 +311,30 @@ describe('handleDeployManifestError — partial deploy, no manifest uploaded', (
     expectNoSdkProse(result.error ?? '');
   });
 
+  it('explains a billing-only refusal instead of advising the same deploy again', async () => {
+    const c = ctx();
+    const error = new ManifestMCPError(ManifestMCPErrorCode.QUERY_FAILED, SDK_PARTIAL_PROSE, {
+      partial: true,
+      failedStep: 'upload',
+      billing_only: true,
+      next_step: `Close the lease with close_lease({ lease_uuid: "${LEASE}" }) to stop its billing.`,
+      lease_uuid: LEASE,
+      provider_uuid: 'p1',
+      provider_url: PROVIDER_URL,
+    });
+
+    const result = await handleDeployManifestError(error, c);
+
+    expect(result.success).toBe(false);
+    expect(c.appRegistry.updateApp).toHaveBeenCalledWith(ADDRESS, LEASE, { provisionState: 'failed' });
+    expect(result.error).toContain('billing-only');
+    expect(result.error).toContain('stop_app("test-app")');
+    expect(result.error).not.toContain('then deploy again');
+    expect(c.onProgress).toHaveBeenCalledWith({ phase: 'failed', detail: result.error });
+    expect(getLease).not.toHaveBeenCalled();
+    expectNoSdkProse(result.error ?? '');
+  });
+
   it('reports a set_domain failure with its own cause', async () => {
     const c = ctx();
 

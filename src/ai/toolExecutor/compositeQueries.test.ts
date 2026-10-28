@@ -1476,6 +1476,40 @@ describe('executeAppDiagnostics', () => {
     expect(data.next_step).not.toContain(FRED_REASON_GUIDANCE.ContainerExited.nextStep);
   });
 
+  it('relays the Fred v0.14 terminal failure budget with a bounded verdict', async () => {
+    const registry = makeRegistry([makeApp()]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({
+      status: 'failed',
+      fail_count: 7,
+      reason: 'HealthCheckFailed',
+      terminal_budget: { verdict: `retry\u001b[31m${'x'.repeat(100)}`, consecutive_failures: 2 },
+    });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    const data = result.data as any;
+    expect(data.fail_count).toBe(7);
+    expect(data.terminal_budget.consecutive_failures).toBe(2);
+    expect(data.terminal_budget.verdict).toMatch(/^retry/);
+    expect(data.terminal_budget.verdict).not.toContain('\u001b');
+    expect(data.terminal_budget.verdict.length).toBeLessThanOrEqual(65);
+    expect(data.next_step).toContain('stop_app("my-app")');
+    expect(data.next_step).not.toContain('close_lease');
+  });
+
+  it('omits terminal_budget when a v0.13 provider sends none', async () => {
+    const registry = makeRegistry([makeApp()]);
+    vi.mocked(getLeaseProvision).mockResolvedValue({ status: 'failed', fail_count: 3, reason: 'ContainerExited' });
+
+    const result = await executeAppDiagnostics(
+      { app_name: 'my-app' },
+      makeOptions({ appRegistry: registry, signing: mockSigning })
+    );
+    expect('terminal_budget' in (result.data as object)).toBe(false);
+  });
+
   // fred's provisionReason() stamps `Unknown` on ANY failed provision with no
   // authored reason, so this remap covers the generic path, not an edge case.
   it('remaps the Unknown next step onto get_logs(app_name)', async () => {

@@ -273,6 +273,131 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
     expect(waitForLeaseStatus).not.toHaveBeenCalled();
   });
 
+  describe('Fred v0.14 reasoned 410 receipts', () => {
+    const gone = (reason: string, error: string) =>
+      new Response(JSON.stringify({ code: 410, error, reason }), { status: 410 });
+    // A lost response leaves the command pending; a later observation then
+    // refreshes the runtime before the same command is recovered.
+    async function recoverAfterRefresh(response: Response) {
+      const env = setup();
+      const { apps: [app], plans: [plan], options, appRegistry } = env;
+      vi.mocked(providerFetch).mockRejectedValueOnce(new TypeError('Lost response'));
+      expect((await dispatch(operation, plan, options)).error).toContain('unconfirmed');
+      appRegistry.updateApp(ADDRESS, app.leaseUuid, {
+        provisionState: 'confirmed', readinessStale: false, connectionStale: false,
+        url: 'https://app.example.com', connection: { host: 'app.example.com' },
+      });
+      vi.mocked(providerFetch).mockResolvedValueOnce(response);
+      return { ...env, result: await dispatch(operation, plan, options) };
+    }
+
+    it('records a lost workload and invalidates its saved endpoints when settling backend_storage_lost', async () => {
+      const { apps: [app], appRegistry, result } = await recoverAfterRefresh(
+        gone('backend_storage_lost', 'the backend storage holding this lease was irrecoverably lost'));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('irrecoverably lost') });
+      expect(result.error).not.toContain('unconfirmed');
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+        provisionState: 'failed', status: 'failed', connectionStale: true, readinessStale: false, chainState: 'active',
+      });
+      expect(waitForLeaseStatus).not.toHaveBeenCalled();
+    });
+
+    it('settles maintenance_expired without changing the runtime it never touched', async () => {
+      const { apps: [app], appRegistry, result } = await recoverAfterRefresh(
+        gone('maintenance_expired', 'this command is older than the lease\'s retained maintenance history and was not run; send a new command'));
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('was not run') });
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+        provisionState: 'confirmed', status: 'running', connectionStale: false, readinessStale: false,
+      });
+    });
+
+    it('keeps an unrecognized 410 reason uncertain and invalidates readiness', async () => {
+      const { apps: [app], plans: [plan], appRegistry, result } = await recoverAfterRefresh(gone('some_future_reason', 'gone'));
+      expect(result.error).toContain('unconfirmed');
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+        provisionState: 'confirmed', readinessStale: true, connectionStale: true,
+      });
+    });
+
+    it('retires backend_storage_lost after a wallet change without projecting into the new session', async () => {
+      const { apps: [app], plans: [plan], options, appRegistry } = setup();
+      let current = true;
+      options.assertAuthorization = () => { if (!current) throw new Error('Wallet changed'); };
+      vi.mocked(providerFetch).mockImplementationOnce(async () => {
+        current = false;
+        return gone('backend_storage_lost', 'the backend storage holding this lease was irrecoverably lost');
+      });
+      await dispatch(operation, plan, options);
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'confirmed', status: 'running' });
+    });
+
+    it('records the lost workload even when the settled receipt cannot be written', async () => {
+      const { apps: [app], plans: [plan], options, appRegistry } = setup();
+      vi.mocked(providerFetch).mockImplementationOnce(async () => {
+        failNextReceiptWrite();
+        return gone('backend_storage_lost', 'the backend storage holding this lease was irrecoverably lost');
+      });
+      const result = await dispatch(operation, plan, options);
+      expect(result.error).toContain('local recovery record could not be retired');
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'failed', connectionStale: true });
+    });
+
+    it('applies the lost workload on a same-key retry when the saved command was unreadable', async () => {
+      const { apps: [app], plans: [plan], options, appRegistry } = setup();
+      appRegistry.updateApp(ADDRESS, app.leaseUuid, { url: 'https://app.example.com', connection: { host: 'app.example.com' } });
+      const lost = () => gone('backend_storage_lost', 'the backend storage holding this lease was irrecoverably lost');
+      const storage = localStorage;
+      vi.mocked(providerFetch).mockImplementationOnce(async () => {
+        // The handoff was saved; every later read of the command fails.
+        vi.stubGlobal('localStorage', {
+          getItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          setItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          removeItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+        });
+        return lost();
+      });
+      const first = await dispatch(operation, plan, options);
+      expect(first.error).toContain('browser storage could not be read');
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'confirmed' });
+
+      vi.stubGlobal('localStorage', storage);
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+      vi.mocked(providerFetch).mockResolvedValueOnce(lost());
+      const retry = await dispatch(operation, plan, options);
+      expect(retry.error).toContain('irrecoverably lost');
+      expect(retry.error).not.toContain('Previously verified');
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+        provisionState: 'failed', status: 'failed', connectionStale: true,
+      });
+      expect(requests().map((request) => request.key)).toEqual([plan.idempotencyKey, plan.idempotencyKey]);
+    });
+
+    it('still replays a cached maintenance_expired receipt when the saved command was unreadable', async () => {
+      const { apps: [app], plans: [plan], options } = setup();
+      const storage = localStorage;
+      vi.mocked(providerFetch).mockImplementationOnce(async () => {
+        vi.stubGlobal('localStorage', {
+          getItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          setItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          removeItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+        });
+        return gone('maintenance_expired', 'this command is older than the lease\'s retained maintenance history and was not run; send a new command');
+      });
+      expect((await dispatch(operation, plan, options)).error).toContain('local recovery record could not be retired');
+      vi.stubGlobal('localStorage', storage);
+      const replay = await dispatch(operation, plan, options);
+      expect(replay.error).toContain('Previously verified');
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('retains an early 400 refusal because its body cannot distinguish prior command admission', async () => {
     const { apps: [app], plans: [plan], options } = setup();
     vi.mocked(providerFetch).mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, error: 'invalid request body' }), { status: 400 }));

@@ -448,11 +448,16 @@ export async function prepareMaintenanceOperation(input: MaintenanceInput): Prom
   return withScopeLock(key, retain);
 }
 
-/** Release only after the caller has verified a settled maintenance outcome. */
+/**
+ * Release only after the caller has verified a settled maintenance outcome.
+ * `project` runs under the same lock only when `record` is still the saved
+ * command, even if the settled receipt cannot be written; it must not throw.
+ */
 export async function completeMaintenanceOperation(
   record: MaintenanceOperation,
   beforeComplete?: () => void,
   outcome: SettledMaintenanceOperation['outcome'] = 'settled',
+  project?: () => void,
 ): Promise<void> {
   const key = storageKey(record);
   await withScopeLock(key, () => {
@@ -465,8 +470,13 @@ export async function completeMaintenanceOperation(
     if (!matches(record, metadata)) return; // A stale result must not clear a newer command.
     const retained = pending.get(key);
     if (retained && retained.idempotencyKey !== record.idempotencyKey) return;
-    persistSettled({ ...record, neverSentKeys: metadata.neverSentKeys,
-      recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, outcome);
+    try {
+      persistSettled({ ...record, neverSentKeys: metadata.neverSentKeys,
+        recoveryAdvised: metadata.recoveryAdvised || getMaintenanceRecoveryIntent(record)?.idempotencyKey === record.idempotencyKey }, outcome);
+    } finally {
+      // The verified provider verdict does not depend on local record cleanup.
+      project?.();
+    }
     pending.delete(key);
   });
 }

@@ -15,7 +15,9 @@ import { nextStepFor } from './failureGuidance';
 const TOOLS_BARNEY_LACKS = ['restore_app', 'close_lease', 'wait_for_app_ready'];
 
 /** The reasons whose SDK sentence is unfollowable in barney and must be replaced. */
-const REMAPPED = ['ContainerExited', 'Unknown', 'RestoreFailed'] as const;
+const REMAPPED = [
+  'ContainerExited', 'HealthCheckFailed', 'ContainerStartFailed', 'BackendStorageLost', 'Unknown', 'RestoreFailed',
+] as const;
 
 describe('nextStepFor — barney tool-surface compatibility', () => {
   it.each(FRED_FAILURE_REASONS)('emits a barney-followable next step for %s', (reason) => {
@@ -47,6 +49,8 @@ describe('nextStepFor — barney tool-surface compatibility', () => {
       'UpdateFailed',
       'VolumeCleanupExhausted',
       'CleanupFailed',
+      'VolumeDeletePending',
+      'VolumeDeletionInProgress',
     ]);
     for (const reason of untouched) {
       expect(nextStepFor(reason, 'my-app')).toBe(FRED_REASON_GUIDANCE[reason].nextStep);
