@@ -1,20 +1,34 @@
 import { ProviderApiError } from '@manifest-network/manifest-sdk/deploy';
 import type { MaintenanceOperation } from './maintenanceOperation';
 
+/** A durable Fred answer that settles the command it names. */
+export interface SettledMaintenanceRefusal {
+  readonly detail: string;
+  /**
+   * Fred also reported the lease's workload gone. Its `/status` answers the same
+   * lease with `provision_status: failed`, so the registry can record that verdict.
+   */
+  readonly workloadLost: boolean;
+}
+
 /**
  * Fred v0.14 durable 410 receipts, keyed by the error body's `reason`. Both are
  * immutable terminal outcomes for the command key: retrying it receives the
  * same answer, and neither command ran. Barney authors the text because the
  * reason is the contract and the message is not.
  */
-const DEFINITIVE_GONE_RECEIPTS: Readonly<Record<string, string>> = {
-  maintenance_expired:
-    'the provider no longer retains this command in the lease\'s maintenance history, so it was not run. ' +
-    'If it is still needed, send it again as a new command',
-  backend_storage_lost:
-    'the provider irrecoverably lost the storage holding this app, so the app and its data on this provider ' +
-    'are gone and the command did not run. Restart and update cannot succeed for it. Release it with stop_app, ' +
-    'because the lease can remain active and billing, then deploy again and restore data from your own backups',
+const DEFINITIVE_GONE_RECEIPTS: Readonly<Record<string, SettledMaintenanceRefusal>> = {
+  maintenance_expired: {
+    detail: 'the provider no longer retains this command in the lease\'s maintenance history, so it was not run. ' +
+      'If it is still needed, send it again as a new command',
+    workloadLost: false,
+  },
+  backend_storage_lost: {
+    detail: 'the provider irrecoverably lost the storage holding this app, so the app and its data on this provider ' +
+      'are gone and the command did not run. Restart and update cannot succeed for it. Release it with stop_app, ' +
+      'because the lease can remain active and billing, then deploy again and restore data from your own backups',
+    workloadLost: true,
+  },
 };
 
 /**
@@ -24,7 +38,7 @@ const DEFINITIVE_GONE_RECEIPTS: Readonly<Record<string, string>> = {
  * this classifier tied to that Fred contract until the tenant API exposes
  * structured receipt codes for every outcome.
  */
-export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOperation): string | undefined {
+export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOperation): SettledMaintenanceRefusal | undefined {
   try {
     if (typeof error !== 'object' || error === null) return undefined;
     const outer = error as { code?: unknown; details?: Record<string, unknown> };
@@ -79,8 +93,8 @@ export function settledMaintenanceRefusal(error: unknown, command: MaintenanceOp
                   const code = character.codePointAt(0)!;
                   return code > 31 && (code < 127 || code > 159);
                 })
-                && !preAdmissionErrors.has(detail)) return detail;
-            } else if (receipt.error === expected) return expected;
+                && !preAdmissionErrors.has(detail)) return { detail, workloadLost: false };
+            } else if (receipt.error === expected) return { detail: expected, workloadLost: false };
           }
         } catch {
           // Malformed/truncated error bodies cannot establish a durable receipt.

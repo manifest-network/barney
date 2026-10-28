@@ -128,7 +128,9 @@ Fred v0.14's `410` answers are durable receipts identified by their body
 `reason`: `maintenance_expired` (the key fell out of the lease's retained
 maintenance history and never ran) and `backend_storage_lost` (the workload and
 its data are gone). Both settle with Barney-authored guidance, so a later
-command uses a new key. `429 maintenance_capacity_reserved` was not recorded and
+command uses a new key. Storage loss is also a runtime verdict: for the current
+session it records the app failed and invalidates its saved endpoints, as
+Fred's `/status` reports `provision_status: failed` for that lease. `429 maintenance_capacity_reserved` was not recorded and
 stays pending for same-key recovery.
 
 `maintenanceOutcome.ts` evaluates command outcome separately from readiness.

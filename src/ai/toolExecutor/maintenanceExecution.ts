@@ -384,15 +384,30 @@ export async function executeMaintenance(
     const refusal = command && settledMaintenanceRefusal(error, command);
     if (command && refusal) {
       let retirementFailed = false;
+      // A lost workload is a runtime verdict, not only a command outcome: record
+      // it and invalidate the saved endpoints, or the app keeps showing as
+      // running with live inventory that background recovery never rechecks.
+      const projectWorkloadLoss = () => {
+        if (!refusal.workloadLost) return;
+        try {
+          options.assertAuthorization?.();
+          if (!isMaintenanceCompletionEpochCurrent(completionEpoch)) return;
+          const current = appRegistry.getAppByLease(address, leaseUuid);
+          if (current?.providerUrl !== providerUrl || current.chainState === 'absent') return;
+          appRegistry.updateApp(address, leaseUuid, { ...maintenanceReadinessPatch('failed', current), connectionStale: true });
+        } catch {
+          // A changed session must not receive the old session's projection.
+        }
+      };
       try {
         // An authoritative receipt remains valid after Esc, wallet changes, or
         // chat invalidation. Identity matching protects any successor command.
-        await completeMaintenanceOperation(command, undefined, 'failed');
+        await completeMaintenanceOperation(command, undefined, 'failed', projectWorkloadLoss);
       } catch {
         retirementFailed = true;
       }
       if (retirementFailed) await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
-      const safeRefusal = sanitizeForDisplay(refusal, 512);
+      const safeRefusal = sanitizeForDisplay(refusal.detail, 512);
       const detail = finishDisplaySentence(`${verb} failed: ${safeRefusal}`);
       const result: MaintenanceResult = { outcome: 'failed', result: { success: false, error: detail } };
       try {

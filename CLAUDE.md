@@ -285,7 +285,7 @@ Payload recovery does not establish admission or outcome.
 Unacknowledged commands add no signatures or provider reads to status queries.
 `reconcileProvisionStatus` preserves confirmed and failed verdicts during in-flight
 observations. The shared provision patch also sets `readinessStale`, keeping failed apps eligible
-for bounded background checks when Fred starts recovering them. Pinned Fred validation receipts (including durable HTTP 400s, and Fred v0.14's reasoned `410 maintenance_expired` / `backend_storage_lost`, which settle with barney-authored copy)
+for bounded background checks when Fred starts recovering them. Pinned Fred validation receipts (including durable HTTP 400s, and Fred v0.14's reasoned `410 maintenance_expired` / `backend_storage_lost`, which settle with barney-authored copy; `backend_storage_lost` also records `provisionState: 'failed'` and `connectionStale` for the current session, matching Fred's `/status`)
 surface their diagnostic and settle; its pre-admission parser/header errors
 remain uncertain. Cleanup after confirmed lease closure is best-effort.
 Completion hashes/results are cleared for a wallet/chain when chat history or

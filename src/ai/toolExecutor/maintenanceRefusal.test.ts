@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { restartApp, updateApp, type FredAuthCtx } from '@manifest-network/manifest-sdk/deploy';
-import { settledMaintenanceRefusal } from './maintenanceRefusal';
+import { settledMaintenanceRefusal as settledReceipt } from './maintenanceRefusal';
 import type { MaintenanceOperation } from './maintenanceOperation';
 
 const original: MaintenanceOperation = {
@@ -25,6 +25,7 @@ async function requestError(command: MaintenanceOperation, status: number, body:
   return { error: await invoke().catch((error: unknown) => error), fetch, providerToken };
 }
 
+const settledMaintenanceRefusal = (error: unknown, command: MaintenanceOperation) => settledReceipt(error, command)?.detail;
 const receipt = (status: number, message: string) => JSON.stringify({ error: message, code: status });
 
 describe('persisted Fred maintenance refusal receipts', () => {
@@ -34,6 +35,7 @@ describe('persisted Fred maintenance refusal receipts', () => {
       const { error } = await requestError(command, status, receipt(status, message));
       expect(error).toMatchObject({ code: 'MAINTENANCE_REQUEST_FAILED', details: { idempotency_key: command.idempotencyKey, outcome: 'unknown' } });
       expect(settledMaintenanceRefusal(error, command)).toBe(message);
+      expect(settledReceipt(error, command)?.workloadLost).toBe(false);
     }
   });
 
@@ -99,6 +101,7 @@ describe('persisted Fred maintenance refusal receipts', () => {
     expect(expired.error).toMatchObject({ code: 'MAINTENANCE_REQUEST_FAILED',
       details: { provider_status: 410, provider_reason: 'maintenance_expired', outcome: 'unknown' } });
     expect(settledMaintenanceRefusal(expired.error, command)).toMatch(/was not run.*new command/);
+    expect(settledReceipt(expired.error, command)?.workloadLost).toBe(false);
 
     const lost = await requestError(command, 410, gone('backend_storage_lost',
       'the backend storage holding this lease was irrecoverably lost'), true);
@@ -106,6 +109,7 @@ describe('persisted Fred maintenance refusal receipts', () => {
     expect(text).toMatch(/did not run/);
     expect(text).toContain('stop_app');
     expect(text).not.toMatch(/close_lease|restore_app/);
+    expect(settledReceipt(lost.error, command)?.workloadLost).toBe(true);
   });
 
   it.each([
