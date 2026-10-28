@@ -24,6 +24,7 @@
       "react-native": "npm:react-native-web@0.21.2"
     },
     "axios": "$axios",
+    "jayson": "5.0.0",
     "postcss": "$postcss",
     "protobufjs": "7.6.6",
     "uuid": "11.1.1",
@@ -66,18 +67,18 @@
     "@types/node": "22.19.7",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "4.1.12",
     "eslint": "9.39.2",
     "eslint-plugin-react-hooks": "7.0.1",
     "eslint-plugin-react-refresh": "0.4.26",
     "globals": "17.0.0",
-    "happy-dom": "20.14.3",
+    "happy-dom": "21.0.4",
     "patch-package": "8.0.1",
     "postcss": "8.5.28",
     "tailwindcss": "4.1.18",
     "typescript": "5.9.3",
     "typescript-eslint": "8.53.1",
-    "vite": "7.3.6",
-    "vitest": "4.1.11"
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
   }
 }

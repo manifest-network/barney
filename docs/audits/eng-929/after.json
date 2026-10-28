@@ -1,0 +1,1527 @@
+{
+ "capturedAt": "2026-10-28",
+ "lockfileSha256": "8964ad997f2e295f5a4b790cba2eb82c1222fea9e4417daff1333eb79a0d4471",
+ "commands": [
+  "npm audit --package-lock-only --json --registry=https://registry.npmjs.org",
+  "npm audit --package-lock-only --omit=dev --json --registry=https://registry.npmjs.org"
+ ],
+ "scopes": {
+  "full": {
+   "counts": {
+    "info": 0,
+    "low": 46,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 46
+   },
+   "packages": {
+    "@chain-registry/keplr": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/cosmos",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@cosmos-kit/core"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@chain-registry/keplr"
+     ]
+    },
+    "@cosmjs/amino": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@cosmjs/proto-signing",
+      "@dao-dao/cosmiframe",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/amino"
+     ]
+    },
+    "@cosmjs/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/crypto"
+     ]
+    },
+    "@cosmjs/proto-signing": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "0.25.0-alpha.0 - 0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/proto-signing"
+     ]
+    },
+    "@cosmjs/tendermint-rpc": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/tendermint-rpc"
+     ]
+    },
+    "@cosmos-kit/core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@chain-registry/keplr",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": ">=2.9.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/core"
+     ]
+    },
+    "@cosmos-kit/react": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "effects": [],
+     "range": ">=2.11.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react"
+     ]
+    },
+    "@cosmos-kit/react-lite": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmos-kit/core",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react"
+     ],
+     "range": ">=2.7.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react-lite"
+     ]
+    },
+    "@dao-dao/cosmiframe": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing"
+     ],
+     "effects": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@dao-dao/cosmiframe"
+     ]
+    },
+    "@keplr-wallet/common": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@keplr-wallet/cosmos"
+     ],
+     "range": ">=0.9.0-alpha.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/common",
+      "node_modules/@keplr-wallet/common"
+     ]
+    },
+    "@keplr-wallet/cosmos": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/common",
+      "@keplr-wallet/common",
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [],
+     "range": ">=0.9.10-rc.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/cosmos",
+      "node_modules/@keplr-wallet/cosmos"
+     ]
+    },
+    "@keplr-wallet/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "elliptic"
+     ],
+     "effects": [
+      "@chain-registry/keplr",
+      "@keplr-wallet/common",
+      "@keplr-wallet/cosmos"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@keplr-wallet/common/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/crypto"
+     ]
+    },
+    "@manifest-network/manifest-agent-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-agent-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto",
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-fred": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-fred"
+     ]
+    },
+    "@manifest-network/manifest-sdk": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifestjs"
+     ],
+     "effects": [],
+     "range": ">=0.19.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-sdk"
+     ]
+    },
+    "@manifest-network/manifestjs": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifestjs"
+     ]
+    },
+    "@manifest-network/stargate": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc"
+     ],
+     "effects": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifestjs"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmjs/stargate"
+     ]
+    },
+    "@manifest-network/web3auth": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmos-kit/core",
+      "@keplr-wallet/cosmos",
+      "@toruslabs/eccrypto",
+      "@web3auth/auth",
+      "@web3auth/modal"
+     ],
+     "effects": [],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmos-kit/web3auth"
+     ]
+    },
+    "@rsbuild/plugin-node-polyfill": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "crypto-browserify"
+     ],
+     "effects": [],
+     "range": "<=0.0.0-next-20240528072128 || 0.3.7 - 1.0.0-alpha.0 || >=1.0.1",
+     "nodes": [
+      "node_modules/@rsbuild/plugin-node-polyfill"
+     ]
+    },
+    "@toruslabs/base-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth"
+     ],
+     "effects": [
+      "@web3auth/ws-embed"
+     ],
+     "range": "0.4.0 - 1.3.0 || >=1.6.16",
+     "nodes": [
+      "node_modules/@toruslabs/base-controllers"
+     ]
+    },
+    "@toruslabs/broadcast-channel": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth"
+     ],
+     "range": "<=12.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/broadcast-channel"
+     ]
+    },
+    "@toruslabs/customauth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/eccrypto",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/customauth"
+     ]
+    },
+    "@toruslabs/eccrypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/customauth",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js"
+     ],
+     "range": "<=6.2.0",
+     "nodes": [
+      "node_modules/@toruslabs/eccrypto"
+     ]
+    },
+    "@toruslabs/ethereum-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=5.10.0",
+     "nodes": [
+      "node_modules/@toruslabs/ethereum-controllers"
+     ]
+    },
+    "@toruslabs/fetch-node-details": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/http-helpers"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": ">=14.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/fetch-node-details"
+     ]
+    },
+    "@toruslabs/http-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "@web3auth/modal"
+     ],
+     "range": "1.0.1 - 1.4.0 || >=7.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/http-helpers"
+     ]
+    },
+    "@toruslabs/metadata-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/metadata-helpers"
+     ]
+    },
+    "@toruslabs/secure-pub-sub": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/secure-pub-sub"
+     ]
+    },
+    "@toruslabs/session-manager": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/session-manager"
+     ]
+    },
+    "@toruslabs/starkware-crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/starkware-crypto"
+     ]
+    },
+    "@toruslabs/torus.js": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/torus.js"
+     ]
+    },
+    "@vanilla-extract/css": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [],
+     "range": "<=0.0.0-vite-plugin-new-20240116010153 || 1.4.0 - 1.21.2",
+     "nodes": [
+      "node_modules/@vanilla-extract/css"
+     ]
+    },
+    "@web3auth/auth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/customauth",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/starkware-crypto",
+      "deepmerge"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/ethereum-controllers",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@web3auth/auth"
+     ]
+    },
+    "@web3auth/modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "@web3auth/no-modal",
+      "deepmerge"
+     ],
+     "effects": [
+      "@manifest-network/web3auth"
+     ],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/modal"
+     ]
+    },
+    "@web3auth/no-modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/eccrypto",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@web3auth/auth",
+      "@web3auth/ws-embed",
+      "deepmerge",
+      "ripple-keypairs",
+      "xrpl"
+     ],
+     "effects": [],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/no-modal"
+     ]
+    },
+    "@web3auth/ws-embed": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=3.0.0",
+     "nodes": [
+      "node_modules/@web3auth/ws-embed"
+     ]
+    },
+    "bip32": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "tiny-secp256k1"
+     ],
+     "effects": [
+      "@keplr-wallet/crypto",
+      "xrpl"
+     ],
+     "range": "1.0.1 - 2.0.6",
+     "nodes": [
+      "node_modules/bip32"
+     ]
+    },
+    "browserify-sign": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "crypto-browserify"
+     ],
+     "range": ">=2.4.0",
+     "nodes": [
+      "node_modules/browserify-sign"
+     ]
+    },
+    "create-ecdh": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "crypto-browserify"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/create-ecdh"
+     ]
+    },
+    "crypto-browserify": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "browserify-sign",
+      "create-ecdh"
+     ],
+     "effects": [
+      "@rsbuild/plugin-node-polyfill"
+     ],
+     "range": ">=3.4.0",
+     "nodes": [
+      "node_modules/crypto-browserify"
+     ]
+    },
+    "deepmerge": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1243505,
+       "name": "deepmerge",
+       "dependency": "deepmerge",
+       "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+       "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4",
+       "severity": "low",
+       "cwe": [
+        "CWE-1321"
+       ],
+       "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+       },
+       "range": ">=4.2.0 <=4.3.1"
+      }
+     ],
+     "effects": [
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@vanilla-extract/css",
+      "@web3auth/auth",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": ">=4.2.0",
+     "nodes": [
+      "node_modules/deepmerge"
+     ]
+    },
+    "elliptic": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1112030,
+       "name": "elliptic",
+       "dependency": "elliptic",
+       "title": "Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
+       "url": "https://github.com/advisories/GHSA-848j-6mx2-7j84",
+       "severity": "low",
+       "cwe": [
+        "CWE-1240"
+       ],
+       "cvss": {
+        "score": 5.6,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
+       },
+       "range": "<=6.6.1"
+      }
+     ],
+     "effects": [
+      "@cosmjs/crypto",
+      "@keplr-wallet/crypto",
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/starkware-crypto",
+      "@toruslabs/torus.js",
+      "browserify-sign",
+      "create-ecdh",
+      "ripple-keypairs",
+      "tiny-secp256k1"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/elliptic"
+     ]
+    },
+    "ripple-keypairs": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "xrpl"
+     ],
+     "range": "<=1.4.0",
+     "nodes": [
+      "node_modules/ripple-keypairs"
+     ]
+    },
+    "tiny-secp256k1": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "bip32"
+     ],
+     "range": "0.0.0-rc-1560324438 || 0.2.0 - 1.1.7",
+     "nodes": [
+      "node_modules/tiny-secp256k1"
+     ]
+    },
+    "xrpl": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "ripple-keypairs"
+     ],
+     "effects": [],
+     "range": "<=2.15.0",
+     "nodes": [
+      "node_modules/xrpl"
+     ]
+    }
+   }
+  },
+  "production": {
+   "counts": {
+    "info": 0,
+    "low": 42,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 42
+   },
+   "packages": {
+    "@chain-registry/keplr": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/cosmos",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@cosmos-kit/core"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@chain-registry/keplr"
+     ]
+    },
+    "@cosmjs/amino": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@cosmjs/proto-signing"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/amino"
+     ]
+    },
+    "@cosmjs/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/crypto"
+     ]
+    },
+    "@cosmjs/proto-signing": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto"
+     ],
+     "effects": [
+      "@dao-dao/cosmiframe",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-sdk",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "range": "0.25.0-alpha.0 - 0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/proto-signing"
+     ]
+    },
+    "@cosmjs/tendermint-rpc": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/crypto"
+     ],
+     "effects": [],
+     "range": "<=0.33.1",
+     "nodes": [
+      "node_modules/@cosmjs/tendermint-rpc"
+     ]
+    },
+    "@cosmos-kit/core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@chain-registry/keplr",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": ">=2.9.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/core"
+     ]
+    },
+    "@cosmos-kit/react": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "effects": [],
+     "range": ">=2.11.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react"
+     ]
+    },
+    "@cosmos-kit/react-lite": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmos-kit/core",
+      "@dao-dao/cosmiframe"
+     ],
+     "effects": [
+      "@cosmos-kit/react"
+     ],
+     "range": ">=2.7.3",
+     "nodes": [
+      "node_modules/@cosmos-kit/react-lite"
+     ]
+    },
+    "@dao-dao/cosmiframe": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing"
+     ],
+     "effects": [
+      "@cosmos-kit/core",
+      "@cosmos-kit/react-lite"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@dao-dao/cosmiframe"
+     ]
+    },
+    "@keplr-wallet/common": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [
+      "@keplr-wallet/cosmos"
+     ],
+     "range": ">=0.9.0-alpha.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/common",
+      "node_modules/@keplr-wallet/common"
+     ]
+    },
+    "@keplr-wallet/cosmos": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@keplr-wallet/common",
+      "@keplr-wallet/common",
+      "@keplr-wallet/crypto",
+      "@keplr-wallet/crypto"
+     ],
+     "effects": [],
+     "range": ">=0.9.10-rc.0",
+     "nodes": [
+      "node_modules/@chain-registry/keplr/node_modules/@keplr-wallet/cosmos",
+      "node_modules/@keplr-wallet/cosmos"
+     ]
+    },
+    "@keplr-wallet/crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "elliptic"
+     ],
+     "effects": [
+      "@chain-registry/keplr",
+      "@keplr-wallet/common",
+      "@keplr-wallet/cosmos"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@keplr-wallet/common/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/cosmos/node_modules/@keplr-wallet/crypto",
+      "node_modules/@keplr-wallet/crypto"
+     ]
+    },
+    "@manifest-network/manifest-agent-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-agent-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-core": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/crypto",
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifestjs",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-core"
+     ]
+    },
+    "@manifest-network/manifest-mcp-fred": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@manifest-network/manifest-mcp-core"
+     ],
+     "effects": [],
+     "range": ">=0.23.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-mcp-fred"
+     ]
+    },
+    "@manifest-network/manifest-sdk": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/proto-signing",
+      "@manifest-network/manifest-agent-core",
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifest-mcp-fred",
+      "@manifest-network/manifestjs"
+     ],
+     "effects": [],
+     "range": ">=0.19.0",
+     "nodes": [
+      "node_modules/@manifest-network/manifest-sdk"
+     ]
+    },
+    "@manifest-network/manifestjs": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc",
+      "@manifest-network/stargate"
+     ],
+     "effects": [
+      "@manifest-network/manifest-sdk"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@manifest-network/manifestjs"
+     ]
+    },
+    "@manifest-network/stargate": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmjs/tendermint-rpc"
+     ],
+     "effects": [
+      "@manifest-network/manifest-mcp-core",
+      "@manifest-network/manifestjs"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmjs/stargate"
+     ]
+    },
+    "@manifest-network/web3auth": {
+     "severity": "low",
+     "isDirect": true,
+     "via": [
+      "@cosmjs/amino",
+      "@cosmjs/proto-signing",
+      "@cosmos-kit/core",
+      "@keplr-wallet/cosmos",
+      "@toruslabs/eccrypto",
+      "@web3auth/auth",
+      "@web3auth/modal"
+     ],
+     "effects": [],
+     "range": "*",
+     "nodes": [
+      "node_modules/@cosmos-kit/web3auth"
+     ]
+    },
+    "@toruslabs/base-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth"
+     ],
+     "effects": [
+      "@web3auth/ws-embed"
+     ],
+     "range": "0.4.0 - 1.3.0 || >=1.6.16",
+     "nodes": [
+      "node_modules/@toruslabs/base-controllers"
+     ]
+    },
+    "@toruslabs/broadcast-channel": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth"
+     ],
+     "range": "<=12.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/broadcast-channel"
+     ]
+    },
+    "@toruslabs/customauth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/eccrypto",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/customauth"
+     ]
+    },
+    "@toruslabs/eccrypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/broadcast-channel",
+      "@toruslabs/customauth",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js"
+     ],
+     "range": "<=6.2.0",
+     "nodes": [
+      "node_modules/@toruslabs/eccrypto"
+     ]
+    },
+    "@toruslabs/ethereum-controllers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=5.10.0",
+     "nodes": [
+      "node_modules/@toruslabs/ethereum-controllers"
+     ]
+    },
+    "@toruslabs/fetch-node-details": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/http-helpers"
+     ],
+     "effects": [],
+     "range": ">=14.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/fetch-node-details"
+     ]
+    },
+    "@toruslabs/http-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/fetch-node-details",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/torus.js",
+      "@web3auth/modal"
+     ],
+     "range": "1.0.1 - 1.4.0 || >=7.0.0",
+     "nodes": [
+      "node_modules/@toruslabs/http-helpers"
+     ]
+    },
+    "@toruslabs/metadata-helpers": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/metadata-helpers"
+     ]
+    },
+    "@toruslabs/secure-pub-sub": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/secure-pub-sub"
+     ]
+    },
+    "@toruslabs/session-manager": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "@toruslabs/metadata-helpers"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/session-manager"
+     ]
+    },
+    "@toruslabs/starkware-crypto": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "@web3auth/auth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/starkware-crypto"
+     ]
+    },
+    "@toruslabs/torus.js": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/eccrypto",
+      "@toruslabs/http-helpers",
+      "elliptic"
+     ],
+     "effects": [
+      "@toruslabs/customauth"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@toruslabs/torus.js"
+     ]
+    },
+    "@vanilla-extract/css": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "deepmerge"
+     ],
+     "effects": [],
+     "range": "<=0.0.0-vite-plugin-new-20240116010153 || 1.4.0 - 1.21.2",
+     "nodes": [
+      "node_modules/@vanilla-extract/css"
+     ]
+    },
+    "@web3auth/auth": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/customauth",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@toruslabs/session-manager",
+      "@toruslabs/starkware-crypto",
+      "deepmerge"
+     ],
+     "effects": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/ethereum-controllers",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/@web3auth/auth"
+     ]
+    },
+    "@web3auth/modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "@web3auth/no-modal",
+      "deepmerge"
+     ],
+     "effects": [
+      "@manifest-network/web3auth"
+     ],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/modal"
+     ]
+    },
+    "@web3auth/no-modal": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/eccrypto",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@toruslabs/secure-pub-sub",
+      "@web3auth/auth",
+      "@web3auth/ws-embed",
+      "deepmerge",
+      "ripple-keypairs",
+      "xrpl"
+     ],
+     "effects": [],
+     "range": ">=9.0.0-alpha.0",
+     "nodes": [
+      "node_modules/@web3auth/no-modal"
+     ]
+    },
+    "@web3auth/ws-embed": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "@toruslabs/base-controllers",
+      "@toruslabs/http-helpers",
+      "@web3auth/auth",
+      "deepmerge"
+     ],
+     "effects": [
+      "@web3auth/no-modal"
+     ],
+     "range": ">=3.0.0",
+     "nodes": [
+      "node_modules/@web3auth/ws-embed"
+     ]
+    },
+    "bip32": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "tiny-secp256k1"
+     ],
+     "effects": [
+      "@keplr-wallet/crypto",
+      "xrpl"
+     ],
+     "range": "1.0.1 - 2.0.6",
+     "nodes": [
+      "node_modules/bip32"
+     ]
+    },
+    "deepmerge": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1243505,
+       "name": "deepmerge",
+       "dependency": "deepmerge",
+       "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+       "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4",
+       "severity": "low",
+       "cwe": [
+        "CWE-1321"
+       ],
+       "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+       },
+       "range": ">=4.2.0 <=4.3.1"
+      }
+     ],
+     "effects": [
+      "@toruslabs/customauth",
+      "@toruslabs/ethereum-controllers",
+      "@toruslabs/http-helpers",
+      "@vanilla-extract/css",
+      "@web3auth/auth",
+      "@web3auth/modal",
+      "@web3auth/no-modal",
+      "@web3auth/ws-embed"
+     ],
+     "range": ">=4.2.0",
+     "nodes": [
+      "node_modules/deepmerge"
+     ]
+    },
+    "elliptic": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      {
+       "source": 1112030,
+       "name": "elliptic",
+       "dependency": "elliptic",
+       "title": "Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
+       "url": "https://github.com/advisories/GHSA-848j-6mx2-7j84",
+       "severity": "low",
+       "cwe": [
+        "CWE-1240"
+       ],
+       "cvss": {
+        "score": 5.6,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L"
+       },
+       "range": "<=6.6.1"
+      }
+     ],
+     "effects": [
+      "@cosmjs/crypto",
+      "@keplr-wallet/crypto",
+      "@toruslabs/eccrypto",
+      "@toruslabs/metadata-helpers",
+      "@toruslabs/starkware-crypto",
+      "@toruslabs/torus.js",
+      "ripple-keypairs",
+      "tiny-secp256k1"
+     ],
+     "range": "*",
+     "nodes": [
+      "node_modules/elliptic"
+     ]
+    },
+    "ripple-keypairs": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "xrpl"
+     ],
+     "range": "<=1.4.0",
+     "nodes": [
+      "node_modules/ripple-keypairs"
+     ]
+    },
+    "tiny-secp256k1": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "elliptic"
+     ],
+     "effects": [
+      "bip32"
+     ],
+     "range": "0.0.0-rc-1560324438 || 0.2.0 - 1.1.7",
+     "nodes": [
+      "node_modules/tiny-secp256k1"
+     ]
+    },
+    "xrpl": {
+     "severity": "low",
+     "isDirect": false,
+     "via": [
+      "bip32",
+      "ripple-keypairs"
+     ],
+     "effects": [],
+     "range": "<=2.15.0",
+     "nodes": [
+      "node_modules/xrpl"
+     ]
+    }
+   }
+  }
+ }
+}

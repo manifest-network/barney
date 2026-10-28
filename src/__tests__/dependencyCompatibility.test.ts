@@ -39,6 +39,10 @@ const ics23Path = stargateRequire.resolve('@confio/ics23');
 const ics23Require = createRequire(ics23Path);
 const { ics23, calculateExistenceRoot, tendermintSpec, verifyMembership } = stargateRequire(ics23Path);
 const ics23CodecPath = ics23Require.resolve('./generated/codecimpl.js');
+const solanaRequire = createRequire(createRequire(clientRequire.resolve('@web3auth/modal')).resolve('@solana/web3.js'));
+const jaysonBrowserPath = solanaRequire.resolve('jayson/lib/client/browser');
+const jaysonRequire = createRequire(jaysonBrowserPath);
+const JaysonBrowserClient = solanaRequire(jaysonBrowserPath);
 
 // The published connector uses extensionless ESM imports, which Node cannot
 // resolve. Transform the actual installed module without copying its behavior.
@@ -126,6 +130,51 @@ describe('dependency compatibility for generated protobuf codecs', () => {
     const proof = ics23.CommitmentProof.decode(ics23.CommitmentProof.encode({ exist: existence }).finish());
     expect(verifyMembership(proof, tendermintSpec, root, key, value)).toBe(true);
     expect(verifyMembership(proof, tendermintSpec, root, key, Uint8Array.from([9]))).toBe(false);
+  });
+});
+
+describe('dependency compatibility for the Solana JSON-RPC client', () => {
+  type RpcCallback = (err: Error | null, response?: unknown) => void;
+  // Solana's entries import only the browser client: callServer receives the
+  // serialized request and returns the raw response text, as its fetch adapter does.
+  function solanaStyleClient(respond: (request: { id: unknown; method: string; params: unknown }) => unknown) {
+    const callServer = vi.fn((request: string, callback: (err: Error | null, response?: string) => void) => {
+      const parsed = JSON.parse(request);
+      const body = Array.isArray(parsed) ? parsed.map(respond) : respond(parsed);
+      callback(null, JSON.stringify(body));
+    });
+    return { client: new JaysonBrowserClient(callServer, {}), callServer };
+  }
+
+  it('resolves the override from the installed Solana consumer without the stream-json parser', () => {
+    const installed = jaysonRequire('../../../package.json');
+    const app = appRequire('../../package.json');
+    expect(installed.name).toBe('jayson');
+    expect(installed.version, jaysonBrowserPath).toBe(app.overrides.jayson);
+    expect(() => jaysonRequire.resolve('stream-json')).toThrow();
+  });
+
+  it('round-trips a single request with a generated UUID id', async () => {
+    const { client, callServer } = solanaStyleClient(({ id, params }) => ({ jsonrpc: '2.0', id, result: params }));
+    const response = await new Promise((resolve, reject) => {
+      client.request('getBalance', ['manifest'], ((err, res) => err ? reject(err) : resolve(res)) as RpcCallback);
+    });
+    const sent = JSON.parse(callServer.mock.calls[0][0]);
+    expect(sent).toMatchObject({ jsonrpc: '2.0', method: 'getBalance', params: ['manifest'] });
+    expect(sent.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(response).toEqual({ jsonrpc: '2.0', id: sent.id, result: ['manifest'] });
+  });
+
+  it('round-trips a batch request and surfaces per-entry errors', async () => {
+    const { client } = solanaStyleClient(({ id, method }) => method === 'fails'
+      ? { jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }
+      : { jsonrpc: '2.0', id, result: method });
+    // Solana builds each batch entry by calling request without a callback.
+    const requests = [client.request('getSlot', []), client.request('fails', [])];
+    const response = await new Promise<Array<{ result?: unknown; error?: { code: number } }>>((resolve, reject) => {
+      client.request(requests, ((err, res) => err ? reject(err) : resolve(res as never)) as RpcCallback);
+    });
+    expect(response.map((entry) => entry.result ?? entry.error?.code)).toEqual(['getSlot', -32601]);
   });
 });
 

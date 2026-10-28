@@ -18,7 +18,8 @@ This directory holds long-form documentation. The top-level [README.md](../READM
 - **[Deployment](dev/deployment.md)** — Docker image, authenticated relay, env vars, quotas, prod operations
 - **[Security](dev/security.md)** — threat model, SSRF, CSP, secret handling
 - **[Transaction boundary](dev/transaction-boundary.md)** — SDK operation inventory, typed consent, fees, and cancellation
-- **[Dependency audit](audits/eng-832/README.md)** — locked dependency findings, patches, compatibility checks, and residual dispositions
+- **[Dependency audit](audits/eng-832/README.md)** — locked dependency findings, patches, and compatibility checks
+- **[Dependency disposition review](audits/eng-929/README.md)** — current residual advisories, overrides added since ENG-832, and review expiry
 
 ## For maintainers
 
