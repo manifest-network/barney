@@ -177,6 +177,21 @@ function noManifestMessage(name: string, step: string | undefined, cancelled: bo
   );
 }
 
+/**
+ * barney's copy for Fred's billing-only upload refusal (SDK 0.24 `billing_only`).
+ * Unlike an ordinary failed upload, deploying the same size on this provider
+ * again is refused the same way, and the lease bills until it is released.
+ */
+function billingOnlyMessage(name: string): string {
+  return (
+    'Deployment failed: every size this lease uses is billing-only at this provider. ' +
+    'The provider bills it and delivers that service outside app hosting, so it refused the manifest ' +
+    'and will never run an app on this lease. The lease is active and billing, or will be shortly. ' +
+    `Release it with stop_app("${name}") unless you meant to buy that service. ` +
+    'Deploying the same size on this provider is refused the same way.'
+  );
+}
+
 interface DeployErrorContext {
   name: string;
   /** From the caller's captured onLeaseCreated value. undefined ⇒ case 1 (no lease). */
@@ -261,7 +276,10 @@ export async function handleDeployManifestError(
       logError('deployError.partialDeploy', error);
       // Durable, and true of the cancelled variant too: recording it stops the next reconcile calling this app 'running' off the ACTIVE lease.
       appRegistry.updateApp(address, leaseUuid, { provisionState: 'failed' });
-      const message = noManifestMessage(name, failedStep, cancelled);
+      // Fred PR #268: matched by the SDK on Fred's `reason: billing_only` (or v0.13.1+ exact text).
+      const message = failedStep === 'upload' && details?.billing_only === true
+        ? billingOnlyMessage(name)
+        : noManifestMessage(name, failedStep, cancelled);
       onProgress?.({ phase: 'failed', detail: message });
       return { success: false, error: message };
     }

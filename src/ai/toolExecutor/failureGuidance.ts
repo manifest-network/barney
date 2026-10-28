@@ -2,12 +2,15 @@
  * Barney-shaped next-step guidance for fred failure reasons.
  *
  * The SDK's `FRED_REASON_GUIDANCE` is curated for mono's OWN MCP tool surface,
- * and three of its `nextStep` sentences name a call barney cannot serve:
- * `ContainerExited` / `Unknown` say `get_logs({ lease_uuid, tail: 200 })` —
- * barney's `get_logs` takes `app_name` — and `RestoreFailed` names a
- * `restore_app` tool barney does not have. Those three are replaced (keeping the
- * SDK's tool-free `explanation` as the lead); the rest name only tools barney
- * does have and are relayed VERBATIM, so the taxonomy cannot drift from the SDK's.
+ * and six of its `nextStep` sentences name a call barney cannot serve:
+ * `ContainerExited` / `Unknown` / `HealthCheckFailed` say
+ * `get_logs({ lease_uuid, tail: 200 })` — barney's `get_logs` takes `app_name` —
+ * `RestoreFailed` and `BackendStorageLost` name a `restore_app` tool barney does
+ * not have, and `HealthCheckFailed` / `ContainerStartFailed` /
+ * `BackendStorageLost` close the lease with mono's `close_lease` where barney
+ * uses `stop_app`. Those six are replaced (keeping the SDK's tool-free
+ * `explanation` as the lead); the rest name only tools barney does have and are
+ * relayed VERBATIM, so the taxonomy cannot drift from the SDK's.
  *
  * OPEN-SET CONTRACT. Fred's `reason` set is open and add-only.
  * `isKnownFailureReason` is the ONLY gate here: an unrecognized reason yields
@@ -41,6 +44,26 @@ const BARNEY_NEXT_STEP: Partial<Record<CuratedFailureReason, NextStepBuilder>> =
     `Call get_logs("${name}", 200) and read the lines just before the exit. ` +
     `Fix the entrypoint or config and update_app("${name}"); if it was OOM-killed, ` +
     `redeploy on a larger size instead.`,
+
+  HealthCheckFailed: (name) =>
+    `${FRED_REASON_GUIDANCE.HealthCheckFailed.explanation} ` +
+    `Call get_logs("${name}", 200) to see why the app is not healthy, then fix the app or its ` +
+    `health_check (start_period must cover startup) and update_app("${name}"). ` +
+    `Stop it with stop_app("${name}") if you no longer need it.`,
+
+  ContainerStartFailed: (name) =>
+    `${FRED_REASON_GUIDANCE.ContainerStartFailed.explanation} ` +
+    `Check the image entrypoint and the manifest command and args (get_logs is usually empty ` +
+    `because nothing ran), fix them or the image, and update_app("${name}"). ` +
+    `Stop it with stop_app("${name}") if you no longer need it.`,
+
+  // Nothing on this lease can recover. The SDK's sentence names restore_app and
+  // close_lease; stop_app is barney's way to end a still-ACTIVE, billing lease.
+  BackendStorageLost: (name) =>
+    `${FRED_REASON_GUIDANCE.BackendStorageLost.explanation} ` +
+    `No restart or update can recover this app or its data. Release it with stop_app("${name}") ` +
+    `while app_status still shows its lease active, then deploy a new app and restore your data ` +
+    `from your own backups.`,
 
   Unknown: (name) =>
     `${FRED_REASON_GUIDANCE.Unknown.explanation} ` +

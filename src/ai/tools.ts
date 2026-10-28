@@ -369,7 +369,7 @@ export const AI_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'app_diagnostics',
-      description: 'Get error details for a failed app.',
+      description: 'Get error details for a failed app. When terminal_budget is present, the provider closes a failing lease only once its verdict is "exhausted"; fail_count is then a lifetime count, not a countdown to closure.',
       parameters: {
         type: 'object',
         properties: {

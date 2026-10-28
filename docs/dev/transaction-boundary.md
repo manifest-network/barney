@@ -4,7 +4,7 @@ Barney plans and previews product actions, obtains user confirmation, then calls
 
 ## Transaction inventory (ENG-830)
 
-Reviewed against the pinned `@manifest-network/manifest-sdk` 0.23.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
+Reviewed against the pinned `@manifest-network/manifest-sdk` 0.24.0. There are no direct `cosmosTx`, `executeTx`, signing-client, or low-level broadcast calls in Barney product code. `src/build/transactionBoundary.test.ts` guards this boundary.
 
 | Product action / caller | SDK operation | Approval data | Validation, fees, and cancellation |
 | --- | --- | --- | --- |
@@ -124,6 +124,12 @@ Wallet changes, history clearing, and store destruction also invalidate cache
 epochs so late responses cannot repopulate a previous session.
 A durable Fred refusal still retires its matching pending record after abort or
 session invalidation; cancellation cannot undo that authoritative receipt.
+Fred v0.14's `410` answers are durable receipts identified by their body
+`reason`: `maintenance_expired` (the key fell out of the lease's retained
+maintenance history and never ran) and `backend_storage_lost` (the workload and
+its data are gone). Both settle with Barney-authored guidance, so a later
+command uses a new key. `429 maintenance_capacity_reserved` was not recorded and
+stays pending for same-key recovery.
 
 `maintenanceOutcome.ts` evaluates command outcome separately from readiness.
 A 202 replay can precede execution while the source runtime is still ready.

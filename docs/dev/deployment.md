@@ -27,6 +27,13 @@ Barney explicitly selects SDK `fredCompatibility: "pr240"` for dev's provider,
 SDK's `v0.13` contract. Manifest previews and deployment/update validation use
 the same provider selection as restart and update requests.
 
+Map every provider running Fred v0.14 or later, the first release with PR 240's
+maintenance contract, to `pr240`; keep Fred v0.13.x providers on `v0.13`. A
+Fred v0.14 provider left on `v0.13` refuses every restart and update, because
+those requests carry no `Idempotency-Key`; the command does not run. Its
+operator can instead list a tenant address in
+`maintenance_legacy_idempotency_tenants` while the setting rolls out.
+
 Read-only status queries do not resolve this mutation compatibility setting;
 they can still observe chain state and provider health if it is invalid.
 

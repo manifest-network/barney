@@ -90,6 +90,36 @@ describe('persisted Fred maintenance refusal receipts', () => {
     expect(settledMaintenanceRefusal(error, original)).toBeUndefined();
   });
 
+  const gone = (reason: string, message: string) => JSON.stringify({ error: message, code: 410, reason });
+
+  it.each(['restart', 'update'] as const)('settles Fred v0.14 reasoned 410 %s receipts with barney copy', async (operation) => {
+    const command = { ...original, operation };
+    const expired = await requestError(command, 410, gone('maintenance_expired',
+      "this command is older than the lease's retained maintenance history and was not run; send a new command"));
+    expect(expired.error).toMatchObject({ code: 'MAINTENANCE_REQUEST_FAILED',
+      details: { provider_status: 410, provider_reason: 'maintenance_expired', outcome: 'unknown' } });
+    expect(settledMaintenanceRefusal(expired.error, command)).toMatch(/was not run.*new command/);
+
+    const lost = await requestError(command, 410, gone('backend_storage_lost',
+      'the backend storage holding this lease was irrecoverably lost'), true);
+    const text = settledMaintenanceRefusal(lost.error, command);
+    expect(text).toMatch(/did not run/);
+    expect(text).toContain('stop_app');
+    expect(text).not.toMatch(/close_lease|restore_app/);
+  });
+
+  it.each([
+    [410, JSON.stringify({ error: 'gone', code: 410 })],
+    [410, gone('some_future_reason', 'gone')],
+    [410, JSON.stringify({ error: 'gone', code: 410, reason: 'maintenance_expired', extra: true })],
+    [410, JSON.stringify({ error: 'gone', code: 409, reason: 'maintenance_expired' })],
+    [410, gone('toString', 'gone')],
+    [429, JSON.stringify({ error: 'maintenance capacity is reserved', code: 429, reason: 'maintenance_capacity_reserved' })],
+  ])('retains uncertainty for an unrecognized or unrecorded HTTP %s answer: %s', async (status, body) => {
+    const { error } = await requestError(original, status, body);
+    expect(settledMaintenanceRefusal(error, original)).toBeUndefined();
+  });
+
   it('requires the SDK recovery context to match the retained command', async () => {
     const { error } = await requestError(original, 404, receipt(404, 'lease not yet provisioned'));
     expect(settledMaintenanceRefusal(error, { ...original, idempotencyKey: crypto.randomUUID() })).toBeUndefined();
