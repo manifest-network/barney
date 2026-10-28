@@ -130,7 +130,9 @@ maintenance history and never ran) and `backend_storage_lost` (the workload and
 its data are gone). Both settle with Barney-authored guidance, so a later
 command uses a new key. Storage loss is also a runtime verdict: for the current
 session it records the app failed and invalidates its saved endpoints, as
-Fred's `/status` reports `provision_status: failed` for that lease. `429 maintenance_capacity_reserved` was not recorded and
+Fred's `/status` reports `provision_status: failed` for that lease. When the
+saved command cannot be read, this receipt is not memoized: the same-key retry
+receives it again and applies the projection. `429 maintenance_capacity_reserved` was not recorded and
 stays pending for same-key recovery.
 
 `maintenanceOutcome.ts` evaluates command outcome separately from readiness.

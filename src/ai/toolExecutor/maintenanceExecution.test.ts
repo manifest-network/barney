@@ -346,6 +346,56 @@ describe.each(['restart', 'update'] as const)('%s command recovery through the r
       expect(result.error).toContain('local recovery record could not be retired');
       expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'failed', connectionStale: true });
     });
+
+    it('applies the lost workload on a same-key retry when the saved command was unreadable', async () => {
+      const { apps: [app], plans: [plan], options, appRegistry } = setup();
+      appRegistry.updateApp(ADDRESS, app.leaseUuid, { url: 'https://app.example.com', connection: { host: 'app.example.com' } });
+      const lost = () => gone('backend_storage_lost', 'the backend storage holding this lease was irrecoverably lost');
+      const storage = localStorage;
+      vi.mocked(providerFetch).mockImplementationOnce(async () => {
+        // The handoff was saved; every later read of the command fails.
+        vi.stubGlobal('localStorage', {
+          getItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          setItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          removeItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+        });
+        return lost();
+      });
+      const first = await dispatch(operation, plan, options);
+      expect(first.error).toContain('browser storage could not be read');
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({ provisionState: 'confirmed' });
+
+      vi.stubGlobal('localStorage', storage);
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)?.idempotencyKey).toBe(plan.idempotencyKey);
+      vi.mocked(providerFetch).mockResolvedValueOnce(lost());
+      const retry = await dispatch(operation, plan, options);
+      expect(retry.error).toContain('irrecoverably lost');
+      expect(retry.error).not.toContain('Previously verified');
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      expect(appRegistry.getAppByLease(ADDRESS, app.leaseUuid)).toMatchObject({
+        provisionState: 'failed', status: 'failed', connectionStale: true,
+      });
+      expect(requests().map((request) => request.key)).toEqual([plan.idempotencyKey, plan.idempotencyKey]);
+    });
+
+    it('still replays a cached maintenance_expired receipt when the saved command was unreadable', async () => {
+      const { apps: [app], plans: [plan], options } = setup();
+      const storage = localStorage;
+      vi.mocked(providerFetch).mockImplementationOnce(async () => {
+        vi.stubGlobal('localStorage', {
+          getItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          setItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+          removeItem: () => { throw new DOMException('Storage unavailable', 'SecurityError'); },
+        });
+        return gone('maintenance_expired', 'this command is older than the lease\'s retained maintenance history and was not run; send a new command');
+      });
+      expect((await dispatch(operation, plan, options)).error).toContain('local recovery record could not be retired');
+      vi.stubGlobal('localStorage', storage);
+      const replay = await dispatch(operation, plan, options);
+      expect(replay.error).toContain('Previously verified');
+      expect(getPendingMaintenanceOperation(ADDRESS, PROVIDER, app.leaseUuid)).toBeUndefined();
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('retains an early 400 refusal because its body cannot distinguish prior command admission', async () => {

@@ -30,6 +30,7 @@ import {
   MaintenanceOperationSupersededError,
   MaintenanceSettlementStorageError,
   MAINTENANCE_CLEANUP_MESSAGE,
+  MAINTENANCE_PROJECTION_MESSAGE,
   type MaintenanceOperation,
 } from './maintenanceOperation';
 import { captureMaintenanceBaseline, evaluateMaintenanceOutcome } from './maintenanceOutcome';
@@ -384,10 +385,12 @@ export async function executeMaintenance(
     const refusal = command && settledMaintenanceRefusal(error, command);
     if (command && refusal) {
       let retirementFailed = false;
+      let projectionReached = false;
       // A lost workload is a runtime verdict, not only a command outcome: record
       // it and invalidate the saved endpoints, or the app keeps showing as
       // running with live inventory that background recovery never rechecks.
       const projectWorkloadLoss = () => {
+        projectionReached = true;
         if (!refusal.workloadLost) return;
         try {
           options.assertAuthorization?.();
@@ -407,20 +410,25 @@ export async function executeMaintenance(
         retirementFailed = true;
       }
       if (retirementFailed) await markMaintenanceRecoveryAdvised(command, options.onMaintenanceRecoveryAdvice);
+      // Unreadable storage stopped settlement before command identity was
+      // checked, so the runtime projection never ran. A cached replay would
+      // retire the command without it; the same-key retry gets the same receipt.
+      const projectionDeferred = refusal.workloadLost && retirementFailed && !projectionReached;
+      const warning = projectionDeferred ? MAINTENANCE_PROJECTION_MESSAGE : MAINTENANCE_CLEANUP_MESSAGE;
       const safeRefusal = sanitizeForDisplay(refusal.detail, 512);
       const detail = finishDisplaySentence(`${verb} failed: ${safeRefusal}`);
       const result: MaintenanceResult = { outcome: 'failed', result: { success: false, error: detail } };
       try {
         options.assertAuthorization?.();
         if (isMaintenanceCompletionEpochCurrent(completionEpoch)) {
-          rememberMaintenanceCompletion(command, result, completionEpoch);
-          onProgress({ phase: 'failed', operation, detail: retirementFailed ? `${detail} ${MAINTENANCE_CLEANUP_MESSAGE}` : detail });
+          if (!projectionDeferred) rememberMaintenanceCompletion(command, result, completionEpoch);
+          onProgress({ phase: 'failed', operation, detail: retirementFailed ? `${detail} ${warning}` : detail });
         }
       } catch {
         // The old wallet's receipt can retire its marker without updating the
         // new session's cache or progress UI.
       }
-      return retirementFailed ? withCleanupWarning(result) : result;
+      return retirementFailed ? withCleanupWarning(result, warning) : result;
     }
     if (command || existedBeforeAttempt) {
       const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
