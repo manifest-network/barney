@@ -21,6 +21,8 @@ import {
 } from './validation.mjs';
 
 const API_PREFIX = '/api/morpheus';
+const MAX_BALANCE_RESPONSE_BYTES = 16 * 1024;
+const USD_AMOUNT = /^(-)?(\d+)(?:\.(\d+))?$/;
 
 function safeLogger(entry) {
   process.stdout.write(`${JSON.stringify({
@@ -193,6 +195,39 @@ function waitForDrain(response) {
   });
 }
 
+/**
+ * Convert a Morpheus USD amount (a decimal string, or a number in older
+ * responses) to integer micro-USD, truncating sub-micro digits. Returns
+ * undefined for anything else so callers can keep their previous verdict.
+ */
+function usdToMicro(value) {
+  const amount = typeof value === 'number' && Number.isFinite(value) ? value.toFixed(6) : value;
+  if (typeof amount !== 'string') return undefined;
+  const match = USD_AMOUNT.exec(amount.trim());
+  if (!match) return undefined;
+  const micro = Number(match[2]) * 1_000_000 + Number((match[3] ?? '').slice(0, 6).padEnd(6, '0'));
+  if (!Number.isSafeInteger(micro)) return undefined;
+  return match[1] ? -micro : micro;
+}
+
+/** Read a small JSON body, or return undefined when it is oversized or invalid. */
+async function readBoundedJson(response, maxBytes) {
+  if (!response.body) return undefined;
+  const chunks = [];
+  let size = 0;
+  // Leaving the loop early cancels the stream through the async iterator.
+  for await (const chunk of response.body) {
+    size += chunk.byteLength;
+    if (size > maxBytes) return undefined;
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
 function safeStreamError(response, message) {
   if (response.destroyed || response.writableEnded) return;
   if (!response.headersSent) {
@@ -232,9 +267,9 @@ export async function createRelay(options = {}) {
         // The model catalog is public. Balance requires the inference API key,
         // so probe both concurrently under one deadline without retaining balances.
         const results = await Promise.all([
-          upstreamModelsUrl(config),
-          upstreamBalanceUrl(config),
-        ].map(async (url) => {
+          { url: upstreamModelsUrl(config) },
+          { url: upstreamBalanceUrl(config), inspect: balanceCoversDefaultRequest },
+        ].map(async ({ url, inspect }) => {
           const response = await fetchImpl(url, {
             method: 'GET',
             headers: {
@@ -244,8 +279,11 @@ export async function createRelay(options = {}) {
             redirect: 'error',
             signal: abort.signal,
           });
-          await response.body?.cancel().catch(() => {});
-          return response.ok;
+          if (!response.ok || !inspect) {
+            await response.body?.cancel().catch(() => {});
+            return response.ok;
+          }
+          return inspect(await readBoundedJson(response, MAX_BALANCE_RESPONSE_BYTES));
         }));
         readinessResult = results.every(Boolean);
       } catch {
@@ -259,6 +297,18 @@ export async function createRelay(options = {}) {
       return readinessResult;
     })();
     return readinessInFlight;
+  }
+
+  /**
+   * An authenticated balance read proves the key works, not that Morpheus will
+   * pay for inference: an empty account answers chat with 402. Report not-ready
+   * once the spendable balance cannot cover one default request. A missing or
+   * unrecognized amount keeps the authentication-only verdict, because draining
+   * the paid route on a provider schema change would be a self-inflicted outage.
+   */
+  function balanceCoversDefaultRequest(balance) {
+    const availableMicroUsd = usdToMicro(balance?.total_available);
+    return availableMicroUsd === undefined || availableMicroUsd >= minimumDefaultSpendMicroUsd;
   }
 
   function expiresInSeconds(expiresAt) {
@@ -448,9 +498,18 @@ export async function createRelay(options = {}) {
 
       if (!upstreamResponse.ok) {
         await upstreamResponse.body?.cancel().catch(() => {});
-        metricRequest('chat', 'upstream_rejected');
+        const paymentRequired = upstreamResponse.status === 402;
+        metricRequest('chat', paymentRequired ? 'upstream_payment_required' : 'upstream_rejected');
         logger({ level: 'warn', event: 'upstream_rejected', requestId, upstreamStatus: upstreamResponse.status });
-        json(response, 502, { error: 'Upstream inference request failed' });
+        if (paymentRequired) {
+          // The operator's Morpheus account cannot pay for inference. Tell the
+          // browser so instead of reporting a generic outage, and expire the
+          // cached readiness verdict so the next probe re-reads the balance.
+          readinessCheckedAt = Number.NEGATIVE_INFINITY;
+          json(response, 402, { error: 'Inference provider account is out of funds' });
+        } else {
+          json(response, 502, { error: 'Upstream inference request failed' });
+        }
         return;
       }
       const contentType = upstreamResponse.headers.get('content-type')?.toLowerCase() ?? '';

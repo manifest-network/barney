@@ -286,7 +286,12 @@ export async function* streamChat(
           ? 'The current request is too large for inference. Start a new chat or shorten the latest message.'
           : response.status === 429
             ? 'The inference quota or concurrency limit has been reached. Try again later.'
-            : 'The inference service is temporarily unavailable.',
+            // The relay's 402 means the operator's Morpheus account is empty.
+            // Avoid "credit"/"balance": MessageBubble's ERROR_PATTERNS would
+            // offer a "Check credits" action for the user's own lease credits.
+            : response.status === 402
+              ? "AI chat is unavailable because the operator's inference account is out of funds. Try again later."
+              : 'The inference service is temporarily unavailable.',
       };
       return;
     }

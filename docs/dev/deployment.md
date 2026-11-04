@@ -267,7 +267,7 @@ reservation, quotas, hard budget, and request limits—not merely inject a key.
 | Endpoint | Exposure | Meaning |
 |----------|----------|---------|
 | `/api/morpheus/healthz` | public through nginx | relay-process liveness only |
-| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached provider reachability and API-key authentication |
+| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached provider reachability, API-key authentication and account funds (`total_available` must cover one default request; an unrecognized amount keeps the authentication verdict) |
 | `/metrics` on relay port 8081 | loopback by default; private network only when explicitly bound | aggregate request, rejection, usage, spend, budget, concurrency, and max identity-quota utilization |
 
 Metrics never contain wallet addresses, identity hashes, prompts, cookies, or
@@ -315,9 +315,10 @@ ledger throughout. Deleting it can permit spend beyond the day's hard budget.
 | 401 | Missing/expired/restarted/logged-out wallet session; re-authentication is expected |
 | 403 | Wallet/chain/session binding, origin, or model mismatch |
 | 429 | Identity quota or concurrency ceiling |
+| 402 | The operator's Morpheus account is out of funds; add credit to the provider account. The relay also re-checks readiness, which drains the paid route until funds return |
 | 503 from paid POST | Provider hard budget/concurrency ceiling or relay unavailable |
 | 502/504 | Sanitized upstream failure, response limit, connection deadline, or total-stream deadline |
-| Liveness succeeds but readiness fails | Provider/key, durable accounting, or default-request budget is unavailable |
+| Liveness succeeds but readiness fails | Provider/key, provider account funds, durable accounting, or default-request budget is unavailable |
 | Provider URL blocked in dev | Rsbuild's separate provider URL safety guard rejected it; see [security.md](security.md) |
 
 Never paste `docker inspect`, provider headers, or environment output into logs,

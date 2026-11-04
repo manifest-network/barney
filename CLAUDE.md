@@ -583,6 +583,6 @@ Server-side variables (never shipped to browser):
 
 The client never calls the Morpheus API directly. All AI requests go through `/api/morpheus/...` (relative to origin):
 
-- **Relay**: `server/` verifies a one-time ADR-036 wallet/chain challenge, issues an HttpOnly session, validates the sole paid route/model/body, durably reserves identity/provider quota, injects the key, and bounds concurrency/streaming. Missing usage or uncertain failures keep their reservation.
+- **Relay**: `server/` verifies a one-time ADR-036 wallet/chain challenge, issues an HttpOnly session, validates the sole paid route/model/body, durably reserves identity/provider quota, injects the key, and bounds concurrency/streaming. Missing usage or uncertain failures keep their reservation. An upstream 402 (the operator's Morpheus account is out of funds) reaches the browser as a 402 with its own chat copy and expires the cached readiness verdict; `/readyz` fails while the provider balance's `total_available` cannot cover one default request, and an unrecognized amount keeps the API-key verdict. The balance itself is never logged, returned or exported as a metric.
 - **Production**: nginx applies coarse IP/origin/body controls and proxies `/api/morpheus/` to the same-container relay on localhost. Its generated config and child environment contain no relay secret.
 - **Development**: Rsbuild proxies `/api/morpheus` to that same relay on localhost. It never reads or injects the provider key.

@@ -8,6 +8,7 @@ import { Secp256k1HdWallet } from '@cosmjs/amino';
 import { toBase64 } from '@cosmjs/encoding';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadRelayConfig } from './config.mjs';
+import { estimateSpendMicroUsd } from './ledger.mjs';
 import { createRelay } from './relay.mjs';
 
 const ORIGIN = 'http://barney.test';
@@ -492,6 +493,70 @@ describe('authenticated Morpheus relay', () => {
     expect(app.relay.ledger.snapshot().provider.spendMicroUsd).toBe(0);
   });
 
+  it('fails readiness when the provider balance cannot cover one default request, without exposing it', async () => {
+    let time = Date.now();
+    let totalAvailable = '0.00';
+    const app = await harness({
+      now: () => time,
+      upstreamHandler: async (request, response) => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(request.url.endsWith('/models')
+          ? { data: [{ id: 'test-model' }] }
+          : { total_available: totalAvailable, currency: 'USD' }));
+      },
+    });
+    const readiness = async () => {
+      time += app.config.readinessCacheMs;
+      return (await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status;
+    };
+    const minimum = estimateSpendMicroUsd(app.config, 1, app.config.maxOutputTokens);
+    expect(minimum).toBe(21);
+
+    expect(await readiness()).toBe(503);
+    for (const [value, status] of [
+      ['-0.12', 503],
+      ['0.0000209', 503],
+      [0.00002, 503],
+      ['0.000021', 200],
+      ['834792.610284', 200],
+      [0.000021, 200],
+    ]) {
+      totalAvailable = value;
+      expect([value, await readiness()]).toEqual([value, status]);
+    }
+    expect(await (await fetch(`${app.relayUrl}/api/morpheus/healthz`)).status).toBe(200);
+    const metrics = await (await fetch(`${app.relayUrl}/metrics`)).text();
+    for (const output of [JSON.stringify(app.logs), metrics]) {
+      expect(output).not.toContain('834792');
+    }
+  });
+
+  it('keeps the authentication verdict when the balance amount is missing or unrecognized', async () => {
+    let time = Date.now();
+    let balanceBody = JSON.stringify({});
+    const app = await harness({
+      now: () => time,
+      upstreamHandler: async (request, response) => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(request.url.endsWith('/models') ? JSON.stringify({ data: [] }) : balanceBody);
+      },
+    });
+    for (const body of [
+      JSON.stringify({}),
+      JSON.stringify({ total_available: null }),
+      JSON.stringify({ total_available: '1e3' }),
+      JSON.stringify({ total_available: 'n/a' }),
+      JSON.stringify({ total_available: '99999999999999999999' }),
+      JSON.stringify({ total_available: '0.00', padding: 'x'.repeat(32 * 1024) }),
+      'not json',
+    ]) {
+      balanceBody = body;
+      time += app.config.readinessCacheMs;
+      expect([body.slice(0, 60), (await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status])
+        .toEqual([body.slice(0, 60), 200]);
+    }
+  });
+
   it('shares a single pair of in-flight probes across concurrent readiness requests', async () => {
     const pending = [];
     const fetchImpl = vi.fn((_url, options) => new Promise((resolve) => {
@@ -641,6 +706,48 @@ describe('authenticated Morpheus relay', () => {
     expect(await response.text()).not.toContain(API_KEY);
     expect(app.relay.ledger.snapshot().provider.spendMicroUsd).toBeGreaterThan(0);
     expect(JSON.stringify(app.logs)).not.toContain(API_KEY);
+  });
+
+  it('reports an unfunded provider account as 402 and re-reads the balance on the next readiness probe', async () => {
+    let time = Date.now();
+    let totalAvailable = '5.00';
+    const app = await harness({
+      now: () => time,
+      upstreamHandler: async (request, response) => {
+        if (request.url.endsWith('/models') || request.url.endsWith('/billing/balance')) {
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify(request.url.endsWith('/models')
+            ? { data: [{ id: 'test-model' }] }
+            : { total_available: totalAvailable }));
+          return;
+        }
+        response.writeHead(402, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ detail: `Insufficient balance for ${API_KEY}` }));
+      },
+    });
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(200);
+
+    totalAvailable = '0.00';
+    const auth = await authenticate(app, await Secp256k1HdWallet.generate(12, { prefix: 'manifest' }));
+    const response = await fetch(`${app.relayUrl}/api/morpheus/chat/completions`, {
+      method: 'POST', headers: authenticatedHeaders(auth), body: JSON.stringify(CHAT_BODY),
+    });
+
+    expect(response.status).toBe(402);
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual({ error: 'Inference provider account is out of funds' });
+    expect(body).not.toContain(API_KEY);
+    expect(body).not.toContain('Insufficient balance');
+    expect(app.relay.ledger.snapshot().provider.spendMicroUsd).toBeGreaterThan(0);
+    expect(app.logs).toContainEqual(expect.objectContaining({ event: 'upstream_rejected', upstreamStatus: 402 }));
+    expect(JSON.stringify(app.logs)).not.toContain(API_KEY);
+    const metrics = await (await fetch(`${app.relayUrl}/metrics`)).text();
+    expect(metrics).toContain('barney_morpheus_relay_requests_total{outcome="upstream_payment_required",route="chat"} 1');
+    expect(metrics).not.toContain('outcome="upstream_rejected"');
+
+    // The readiness cache has not expired, but the 402 invalidated it.
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+    expect(app.upstreamRequests.filter((request) => request.url.endsWith('/billing/balance'))).toHaveLength(2);
   });
 
   it('aborts an active paid request when its wallet session logs out', async () => {
