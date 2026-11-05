@@ -267,7 +267,7 @@ reservation, quotas, hard budget, and request limits—not merely inject a key.
 | Endpoint | Exposure | Meaning |
 |----------|----------|---------|
 | `/api/morpheus/healthz` | public through nginx | relay-process liveness only |
-| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached provider reachability, API-key authentication and account funds (`total_available` must cover one default request; an unrecognized amount keeps the authentication verdict) |
+| `/api/morpheus/readyz` | public/internal through nginx | ledger, default-request budget, and cached provider reachability, API-key authentication and account funds (the balance Morpheus will spend must cover one default request: prepaid funds without staking, the staking allowance without overage, or `total_available` with overage; an unrecognized amount keeps the authentication verdict) |
 | `/metrics` on relay port 8081 | loopback by default; private network only when explicitly bound | aggregate request, rejection, usage, spend, budget, concurrency, and max identity-quota utilization |
 
 Metrics never contain wallet addresses, identity hashes, prompts, cookies, or

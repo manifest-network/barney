@@ -158,6 +158,25 @@ async function makeHarness({ config: configOverrides = {}, now, upstreamHandler,
   };
 }
 
+// Mirrors the Morpheus GET /billing/balance response (USD amounts as strings).
+function balancePayload({
+  total = '0.00',
+  paid = '0.00',
+  staking = '0.00',
+  daily = '0.00',
+  isStaker = false,
+  allowOverage = false,
+} = {}) {
+  return {
+    paid: { posted_balance: paid, pending_holds: '0.00', available: paid },
+    staking: { daily_amount: daily, refresh_date: null, available: staking },
+    total_available: total,
+    is_staker: isStaker,
+    allow_overage: allowOverage,
+    currency: 'USD',
+  };
+}
+
 const harnesses = [];
 afterEach(async () => {
   await Promise.all(harnesses.splice(0).map((harness) => harness.close()));
@@ -493,38 +512,53 @@ describe('authenticated Morpheus relay', () => {
     expect(app.relay.ledger.snapshot().provider.spendMicroUsd).toBe(0);
   });
 
-  it('fails readiness when the provider balance cannot cover one default request, without exposing it', async () => {
+  it('fails readiness when the spendable balance cannot cover one default request, without exposing it', async () => {
     let time = Date.now();
-    let totalAvailable = '0.00';
+    let balance = balancePayload();
     const app = await harness({
       now: () => time,
       upstreamHandler: async (request, response) => {
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify(request.url.endsWith('/models')
-          ? { data: [{ id: 'test-model' }] }
-          : { total_available: totalAvailable, currency: 'USD' }));
+        response.end(JSON.stringify(request.url.endsWith('/models') ? { data: [{ id: 'test-model' }] } : balance));
       },
     });
-    const readiness = async () => {
-      time += app.config.readinessCacheMs;
-      return (await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status;
-    };
     const minimum = estimateSpendMicroUsd(app.config, 1, app.config.maxOutputTokens);
     expect(minimum).toBe(21);
 
-    expect(await readiness()).toBe(503);
-    for (const [value, status] of [
-      ['-0.12', 503],
-      ['0.0000209', 503],
-      [0.00002, 503],
-      ['0.000021', 200],
-      ['834792.610284', 200],
-      [0.000021, 200],
+    for (const [label, payload, status] of [
+      // Without staking, Morpheus spends prepaid funds only.
+      ['empty prepaid account', balancePayload(), 503],
+      ['negative prepaid funds', balancePayload({ paid: '-0.12', total: '-0.12' }), 503],
+      ['prepaid below minimum (truncated)', balancePayload({ paid: '0.0000209', total: '0.0000209' }), 503],
+      ['prepaid at minimum', balancePayload({ paid: '0.000021', total: '0.000021' }), 200],
+      ['prepaid funded', balancePayload({ paid: '834792.610284', total: '834792.610284' }), 200],
+      // A staking account without overage cannot fall back to prepaid funds.
+      ['staking exhausted, overage denied', balancePayload({
+        isStaker: true, daily: '5.00', staking: '0.00', paid: '25.00', total: '25.00',
+      }), 503],
+      ['staking allowance left, overage denied', balancePayload({
+        isStaker: true, daily: '5.00', staking: '3.47', paid: '0.00', total: '3.47',
+      }), 200],
+      ['configured allowance without an active stake', balancePayload({
+        daily: '5.00', staking: '0.00', paid: '25.00', total: '25.00',
+      }), 503],
+      // With overage, both buckets are spendable.
+      ['staking exhausted, overage allowed', balancePayload({
+        isStaker: true, allowOverage: true, daily: '5.00', staking: '0.00', paid: '25.00', total: '25.00',
+      }), 200],
+      ['both buckets empty, overage allowed', balancePayload({
+        isStaker: true, allowOverage: true, daily: '5.00',
+      }), 503],
+      // Numeric amounts truncate exactly like strings.
+      ['numeric below minimum', { ...balancePayload(), paid: { available: 0.0000209 } }, 503],
+      ['numeric at minimum', { ...balancePayload(), paid: { available: 0.000021 } }, 200],
+      ['numeric below a micro-dollar', { ...balancePayload(), paid: { available: 1e-7 } }, 503],
     ]) {
-      totalAvailable = value;
-      expect([value, await readiness()]).toEqual([value, status]);
+      balance = payload;
+      time += app.config.readinessCacheMs;
+      expect([label, (await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status]).toEqual([label, status]);
     }
-    expect(await (await fetch(`${app.relayUrl}/api/morpheus/healthz`)).status).toBe(200);
+    expect((await fetch(`${app.relayUrl}/api/morpheus/healthz`)).status).toBe(200);
     const metrics = await (await fetch(`${app.relayUrl}/metrics`)).text();
     for (const output of [JSON.stringify(app.logs), metrics]) {
       expect(output).not.toContain('834792');
@@ -541,19 +575,24 @@ describe('authenticated Morpheus relay', () => {
         response.end(request.url.endsWith('/models') ? JSON.stringify({ data: [] }) : balanceBody);
       },
     });
-    for (const body of [
-      JSON.stringify({}),
-      JSON.stringify({ total_available: null }),
-      JSON.stringify({ total_available: '1e3' }),
-      JSON.stringify({ total_available: 'n/a' }),
-      JSON.stringify({ total_available: '99999999999999999999' }),
-      JSON.stringify({ total_available: '0.00', padding: 'x'.repeat(32 * 1024) }),
-      'not json',
+    const staker = balancePayload({ isStaker: true, daily: '5.00' });
+    for (const [label, body] of [
+      ['empty object', {}],
+      ['legacy total only', { total_available: '0.00' }],
+      ['non-boolean is_staker', { ...balancePayload(), is_staker: 'false' }],
+      ['missing staking bucket', { ...balancePayload(), staking: undefined }],
+      ['null prepaid amount', { ...balancePayload(), paid: { available: null } }],
+      ['exponent prepaid amount', { ...balancePayload(), paid: { available: '1e3' } }],
+      ['text prepaid amount', { ...balancePayload(), paid: { available: 'n/a' } }],
+      ['oversized prepaid amount', { ...balancePayload(), paid: { available: '99999999999999999999' } }],
+      ['staker with non-boolean overage', { ...staker, allow_overage: 'no' }],
+      ['staker with missing allowance', { ...staker, staking: { daily_amount: '5.00' } }],
+      ['oversized body', { ...balancePayload(), padding: 'x'.repeat(32 * 1024) }],
+      ['invalid JSON', 'not json'],
     ]) {
-      balanceBody = body;
+      balanceBody = typeof body === 'string' ? body : JSON.stringify(body);
       time += app.config.readinessCacheMs;
-      expect([body.slice(0, 60), (await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status])
-        .toEqual([body.slice(0, 60), 200]);
+      expect([label, (await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status]).toEqual([label, 200]);
     }
   });
 
@@ -718,7 +757,7 @@ describe('authenticated Morpheus relay', () => {
           response.writeHead(200, { 'Content-Type': 'application/json' });
           response.end(JSON.stringify(request.url.endsWith('/models')
             ? { data: [{ id: 'test-model' }] }
-            : { total_available: totalAvailable }));
+            : balancePayload({ paid: totalAvailable, total: totalAvailable })));
           return;
         }
         response.writeHead(402, { 'Content-Type': 'application/json' });
@@ -748,6 +787,96 @@ describe('authenticated Morpheus relay', () => {
     // The readiness cache has not expired, but the 402 invalidated it.
     expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
     expect(app.upstreamRequests.filter((request) => request.url.endsWith('/billing/balance'))).toHaveLength(2);
+  });
+
+  it('does not let a readiness probe started before a 402 cache its funded verdict', async () => {
+    let totalAvailable = '5.00';
+    let releaseModels;
+    const modelsReleased = new Promise((resolve) => { releaseModels = resolve; });
+    let modelsEntered;
+    const modelsPending = new Promise((resolve) => { modelsEntered = resolve; });
+    const app = await harness({
+      upstreamHandler: async (request, response, _record, number) => {
+        if (request.url.endsWith('/models')) {
+          if (number <= 2) {
+            modelsEntered();
+            await modelsReleased;
+          }
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ data: [{ id: 'test-model' }] }));
+          return;
+        }
+        if (request.url.endsWith('/billing/balance')) {
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify(balancePayload({ paid: totalAvailable, total: totalAvailable })));
+          return;
+        }
+        response.writeHead(402, { 'Content-Type': 'application/json' });
+        response.end('{}');
+      },
+    });
+    const auth = await authenticate(app, await Secp256k1HdWallet.generate(12, { prefix: 'manifest' }));
+
+    // The older probe reads a funded balance, then waits on the model catalog.
+    const olderReadiness = fetch(`${app.relayUrl}/api/morpheus/readyz`);
+    await modelsPending;
+    await vi.waitFor(() => expect(app.upstreamRequests.filter((request) => request.url.endsWith('/billing/balance')))
+      .toHaveLength(1));
+
+    totalAvailable = '0.00';
+    const chat = await fetch(`${app.relayUrl}/api/morpheus/chat/completions`, {
+      method: 'POST', headers: authenticatedHeaders(auth), body: JSON.stringify(CHAT_BODY),
+    });
+    expect(chat.status).toBe(402);
+
+    releaseModels();
+    expect((await olderReadiness).status).toBe(200);
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+    expect(app.upstreamRequests.filter((request) => request.url.endsWith('/billing/balance'))).toHaveLength(2);
+  });
+
+  it('starts a fresh readiness probe after a 402 instead of joining one already in flight', async () => {
+    let totalAvailable = '5.00';
+    let releaseFirstModels;
+    const firstModelsReleased = new Promise((resolve) => { releaseFirstModels = resolve; });
+    let firstModelsEntered;
+    const firstModelsPending = new Promise((resolve) => { firstModelsEntered = resolve; });
+    let modelRequests = 0;
+    const app = await harness({
+      upstreamHandler: async (request, response) => {
+        if (request.url.endsWith('/models')) {
+          modelRequests += 1;
+          if (modelRequests === 1) {
+            firstModelsEntered();
+            await firstModelsReleased;
+          }
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ data: [{ id: 'test-model' }] }));
+          return;
+        }
+        if (request.url.endsWith('/billing/balance')) {
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify(balancePayload({ paid: totalAvailable, total: totalAvailable })));
+          return;
+        }
+        response.writeHead(402, { 'Content-Type': 'application/json' });
+        response.end('{}');
+      },
+    });
+    const auth = await authenticate(app, await Secp256k1HdWallet.generate(12, { prefix: 'manifest' }));
+
+    const olderReadiness = fetch(`${app.relayUrl}/api/morpheus/readyz`);
+    await firstModelsPending;
+    totalAvailable = '0.00';
+    expect((await fetch(`${app.relayUrl}/api/morpheus/chat/completions`, {
+      method: 'POST', headers: authenticatedHeaders(auth), body: JSON.stringify(CHAT_BODY),
+    })).status).toBe(402);
+
+    // Still blocked: the older probe has not finished, so a joined request would hang here.
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
+    releaseFirstModels();
+    await olderReadiness;
+    expect((await fetch(`${app.relayUrl}/api/morpheus/readyz`)).status).toBe(503);
   });
 
   it('aborts an active paid request when its wallet session logs out', async () => {
