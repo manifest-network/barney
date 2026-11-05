@@ -21,6 +21,8 @@ import {
 } from './validation.mjs';
 
 const API_PREFIX = '/api/morpheus';
+const MAX_BALANCE_RESPONSE_BYTES = 16 * 1024;
+const USD_AMOUNT = /^(-)?(\d+)(?:\.(\d+))?$/;
 
 function safeLogger(entry) {
   process.stdout.write(`${JSON.stringify({
@@ -193,6 +195,64 @@ function waitForDrain(response) {
   });
 }
 
+/**
+ * Convert a Morpheus USD amount (a decimal string, or a number in older
+ * responses) to integer micro-USD, truncating sub-micro digits. Returns
+ * undefined for anything else so callers can keep their previous verdict.
+ */
+function usdToMicro(value) {
+  let amount = value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return undefined;
+    // String() gives the shortest exact decimal form, so truncation below
+    // applies to numbers too (toFixed would round 0.0000209 up to 0.000021).
+    // It switches to exponent notation only below a micro-dollar, which
+    // truncates to zero anyway.
+    if (Math.abs(value) < 1e-6) return 0;
+    amount = String(value);
+  }
+  if (typeof amount !== 'string') return undefined;
+  const match = USD_AMOUNT.exec(amount.trim());
+  if (!match) return undefined;
+  const micro = Number(match[2]) * 1_000_000 + Number((match[3] ?? '').slice(0, 6).padEnd(6, '0'));
+  if (!Number.isSafeInteger(micro)) return undefined;
+  return match[1] ? -micro : micro;
+}
+
+/**
+ * The balance Morpheus will actually spend on a request, mirroring its
+ * `BillingService._compute_spending_split`: an account without staking spends
+ * prepaid funds; a staking account spends its daily allowance first and falls
+ * back to prepaid funds only when overage is allowed. Returns undefined when a
+ * field the applicable rule needs is missing or unrecognized.
+ */
+function spendableMicroUsd(balance) {
+  if (typeof balance?.is_staker !== 'boolean') return undefined;
+  const dailyStakingMicroUsd = usdToMicro(balance.staking?.daily_amount);
+  if (dailyStakingMicroUsd === undefined) return undefined;
+  if (!balance.is_staker && dailyStakingMicroUsd <= 0) return usdToMicro(balance.paid?.available);
+  if (typeof balance.allow_overage !== 'boolean') return undefined;
+  return usdToMicro(balance.allow_overage ? balance.total_available : balance.staking?.available);
+}
+
+/** Read a small JSON body, or return undefined when it is oversized or invalid. */
+async function readBoundedJson(response, maxBytes) {
+  if (!response.body) return undefined;
+  const chunks = [];
+  let size = 0;
+  // Leaving the loop early cancels the stream through the async iterator.
+  for await (const chunk of response.body) {
+    size += chunk.byteLength;
+    if (size > maxBytes) return undefined;
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
 function safeStreamError(response, message) {
   if (response.destroyed || response.writableEnded) return;
   if (!response.headersSent) {
@@ -219,22 +279,25 @@ export async function createRelay(options = {}) {
   let readinessCheckedAt = Number.NEGATIVE_INFINITY;
   let readinessResult = false;
   let readinessInFlight;
+  let readinessGeneration = 0;
   const minimumDefaultSpendMicroUsd = estimateSpendMicroUsd(config, 1, config.maxOutputTokens);
   await ledger.init();
 
   async function probeUpstream() {
     if (now() - readinessCheckedAt < config.readinessCacheMs) return readinessResult;
     if (readinessInFlight) return readinessInFlight;
+    const generation = readinessGeneration;
     readinessInFlight = (async () => {
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), config.upstreamConnectTimeoutMs);
+      let ready = false;
       try {
         // The model catalog is public. Balance requires the inference API key,
         // so probe both concurrently under one deadline without retaining balances.
         const results = await Promise.all([
-          upstreamModelsUrl(config),
-          upstreamBalanceUrl(config),
-        ].map(async (url) => {
+          { url: upstreamModelsUrl(config) },
+          { url: upstreamBalanceUrl(config), inspect: balanceCoversDefaultRequest },
+        ].map(async ({ url, inspect }) => {
           const response = await fetchImpl(url, {
             method: 'GET',
             headers: {
@@ -244,21 +307,49 @@ export async function createRelay(options = {}) {
             redirect: 'error',
             signal: abort.signal,
           });
-          await response.body?.cancel().catch(() => {});
-          return response.ok;
+          if (!response.ok || !inspect) {
+            await response.body?.cancel().catch(() => {});
+            return response.ok;
+          }
+          return inspect(await readBoundedJson(response, MAX_BALANCE_RESPONSE_BYTES));
         }));
-        readinessResult = results.every(Boolean);
+        ready = results.every(Boolean);
       } catch {
-        readinessResult = false;
+        ready = false;
       } finally {
         abort.abort();
         clearTimeout(timer);
+      }
+      // A probe invalidated while running still answers the callers already
+      // waiting on it, but it must not cache a verdict read before the
+      // invalidation or clear a newer probe.
+      if (generation === readinessGeneration) {
+        readinessResult = ready;
         readinessCheckedAt = now();
         readinessInFlight = undefined;
       }
-      return readinessResult;
+      return ready;
     })();
     return readinessInFlight;
+  }
+
+  /** Discard the cached and in-flight readiness verdicts so the next probe starts fresh. */
+  function invalidateReadiness() {
+    readinessGeneration += 1;
+    readinessCheckedAt = Number.NEGATIVE_INFINITY;
+    readinessInFlight = undefined;
+  }
+
+  /**
+   * An authenticated balance read proves the key works, not that Morpheus will
+   * pay for inference: an empty account answers chat with 402. Report not-ready
+   * once the spendable balance cannot cover one default request. A missing or
+   * unrecognized amount keeps the authentication-only verdict, because draining
+   * the paid route on a provider schema change would be a self-inflicted outage.
+   */
+  function balanceCoversDefaultRequest(balance) {
+    const availableMicroUsd = spendableMicroUsd(balance);
+    return availableMicroUsd === undefined || availableMicroUsd >= minimumDefaultSpendMicroUsd;
   }
 
   function expiresInSeconds(expiresAt) {
@@ -448,9 +539,18 @@ export async function createRelay(options = {}) {
 
       if (!upstreamResponse.ok) {
         await upstreamResponse.body?.cancel().catch(() => {});
-        metricRequest('chat', 'upstream_rejected');
+        const paymentRequired = upstreamResponse.status === 402;
+        metricRequest('chat', paymentRequired ? 'upstream_payment_required' : 'upstream_rejected');
         logger({ level: 'warn', event: 'upstream_rejected', requestId, upstreamStatus: upstreamResponse.status });
-        json(response, 502, { error: 'Upstream inference request failed' });
+        if (paymentRequired) {
+          // The operator's Morpheus account cannot pay for inference. Tell the
+          // browser so instead of reporting a generic outage, and discard the
+          // readiness verdict so the next probe re-reads the balance.
+          invalidateReadiness();
+          json(response, 402, { error: 'Inference provider account is out of funds' });
+        } else {
+          json(response, 502, { error: 'Upstream inference request failed' });
+        }
         return;
       }
       const contentType = upstreamResponse.headers.get('content-type')?.toLowerCase() ?? '';

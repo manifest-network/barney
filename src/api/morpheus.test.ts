@@ -375,6 +375,22 @@ describe('streamChat', () => {
     );
   });
 
+  it('reports an operator funding failure for a relay 402', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 402,
+      text: () => Promise.resolve('{"error":"Inference provider account is out of funds"}'),
+    }));
+
+    const chunks = await collectChunks(BASE_OPTIONS);
+
+    expect(chunks).toHaveLength(1);
+    const { error } = chunks[0] as { type: 'error'; error: string };
+    expect(error).toBe("AI chat is unavailable because the operator's inference account is out of funds. Try again later.");
+    // MessageBubble would otherwise suggest checking the user's own lease credits.
+    expect(error).not.toMatch(/insufficient|not enough|credit|balance/i);
+  });
+
   it('handles [DONE] sentinel in SSE stream', async () => {
     vi.stubGlobal('fetch', mockFetchWithSSE([
       encode(
